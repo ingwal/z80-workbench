@@ -1,0 +1,1985 @@
+<meta charset="utf-8">
+<title>Z80 Workbench</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="css/bootstrap.min.css">
+<link rel="stylesheet" href="css/scandi.css">
+<style>
+/* Layout: Bootstrap grid of scandi panels under a sticky toolbar. Light only, like scandi.css.
+   scandi.css supplies the zinc tokens (--zn-*, --background, --foreground, --muted-fg, --border, --radius*). */
+:root{
+  color-scheme:light;
+  --font-sans:"IBM Plex Sans",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --font-mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  --bs-body-font-family:var(--font-sans);
+  --marker:#fef3c7;      /* amber-100: next instruction */
+  --marker-edge:#f59e0b; /* amber-500 */
+  --pen:#b91c1c;         /* red-700: values changed by the last step */
+  --info:#1d4ed8;        /* blue-700: stack, assembler cursor */
+}
+body{background:var(--background);color:var(--foreground);font-size:14px;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:0 40px}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--background)}
+body.dragging{outline:3px dashed var(--info);outline-offset:-8px}
+
+/* header + toolbar */
+.apphead{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 16px;padding-block:20px 12px}
+.logo{font:700 30px/1 var(--font-sans);letter-spacing:-.02em;margin:0}
+.logo small{font:600 13px var(--font-mono);letter-spacing:.18em;text-transform:uppercase;color:var(--muted-fg);margin-left:10px}
+.apphead p{margin:0;color:var(--muted-fg);max-width:70ch}
+.bar{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--background);
+  display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;padding-block:10px;border-bottom:1px solid var(--border);margin-bottom:16px}
+.grp{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+#b-reset,#b-hex{gap:0}
+.btn kbd{background:none;color:inherit;box-shadow:none;padding:0;font:500 11px var(--font-mono);opacity:.6}
+.field{display:inline-flex;align-items:center;gap:6px;margin:0;font-size:13px;font-weight:500;color:var(--muted-fg)}
+.addr{width:auto;flex-wrap:nowrap}
+.addr .input-group-text{height:30px;padding:0 7px;font:500 13px var(--font-mono);background:var(--zn-100);border-color:var(--input-border);color:var(--muted-fg)}
+.hexin.form-control{height:30px;width:7ch;padding:3px 7px;font:500 13px var(--font-mono);text-transform:uppercase}
+.addr .hexin.form-control{border-top-left-radius:0;border-bottom-left-radius:0}
+.form-select.speed{height:30px;width:auto;padding:3px 30px 3px 10px;font-size:13px;border-color:var(--input-border)}
+.status{display:flex;align-items:center;gap:10px;margin-left:auto;min-width:0;flex-wrap:wrap}
+.status .label{text-transform:uppercase;letter-spacing:.06em}
+.msg{color:var(--muted-fg);font-size:13px;min-width:0}
+
+details.paste{margin:-4px 0 16px}
+details.paste summary{cursor:pointer;font-size:13px;font-weight:500;width:max-content}
+.pastebox{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start;margin-top:8px}
+.pastebox textarea.form-control{font:13px/1.5 var(--font-mono);flex:1 1 320px;min-width:0;width:auto;min-height:5.5em}
+
+/* panels (scandi .panel): registers | listing | memory side by side from 1280px */
+.bench{display:grid;gap:16px;align-items:start;grid-template-columns:minmax(0,1fr);grid-template-areas:"regs" "dis" "stack" "mem" "io"}
+@media (min-width:900px){.bench{grid-template-columns:262px minmax(0,1fr);grid-template-rows:auto 1fr auto auto;grid-template-areas:"regs dis" "stack dis" "mem mem" "io io"}}
+@media (min-width:1280px){.bench{grid-template-columns:262px minmax(330px,1fr) auto;grid-template-rows:auto 1fr;grid-template-areas:"regs dis mem" "stack dis io"}}
+#p-regs{grid-area:regs}#p-dis{grid-area:dis}#p-stack{grid-area:stack}#p-mem{grid-area:mem}#p-io{grid-area:io}
+.panel{margin:0;min-width:0}
+#p-regs .panel-heading,#p-stack .panel-heading{padding:10px 12px}
+#p-regs .panel-body,#p-stack .panel-body{padding:10px 12px 12px}
+.panel-heading{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:6px 10px;padding:12px 16px}
+.panel-title{font:600 13px/1.2 var(--font-mono);letter-spacing:.14em;text-transform:uppercase;margin:0}
+.panel-body{padding:14px 16px 16px}
+.hint{font-size:12px;color:var(--muted-fg);margin:12px 0 0}
+
+/* register map, laid out like the reference-manual page */
+.regmap{display:grid;grid-template-columns:repeat(2,minmax(0,1fr)) 8px repeat(2,minmax(0,1fr));grid-auto-rows:26px;padding:1px}
+.cell{box-shadow:0 0 0 1px var(--zn-400);background:var(--background);display:flex;align-items:center;justify-content:space-between;gap:4px;padding:0 5px;cursor:text}
+.cell label{font:500 10px/1 var(--font-mono);color:var(--muted-fg);margin:0;cursor:text;white-space:nowrap}
+.cell input{font:500 13px/1.2 var(--font-mono);width:2.6ch;text-align:right;border:0;background:transparent;padding:0 1px;text-transform:uppercase;color:var(--foreground);cursor:text;border-radius:var(--radius-sm)}
+.cell.wide input{width:4.8ch}
+.cell:hover input{background:var(--zn-100)}
+.cell input:focus{outline:none;background:var(--marker)}
+.cell.chg input{color:var(--pen);font-weight:600}
+.notes{grid-column:4/6;grid-row:6/12;padding:2px 0 0 4px;font:400 11px/1.75 var(--font-mono);color:var(--muted-fg)}
+.notes b{font-weight:500;color:var(--foreground)}
+.flags{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));margin-top:10px;padding:1px}
+.flag{box-shadow:0 0 0 1px var(--zn-400);border:0;background:var(--background);padding:3px 0 2px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:1px}
+.flag span{font:500 10px/1 var(--font-mono);color:var(--muted-fg)}
+.flag b{font:600 13px/1.2 var(--font-mono);color:var(--foreground)}
+.flag:hover{background:var(--zn-100)}
+.flag.on{background:var(--zn-900)}
+.flag.on span,.flag.on b{color:#fff}
+.flag.undoc span{opacity:.7}
+.flag.chg b{color:var(--pen)}
+.flag.on.chg b{color:#fca5a5}
+.counters{display:flex;flex-wrap:wrap;gap:4px 16px;margin-top:12px;font-size:12px;color:var(--muted-fg);font-variant-numeric:tabular-nums}
+.counters b{font:500 12px var(--font-mono);color:var(--foreground)}
+
+/* listing */
+.asmbar{display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;margin-bottom:6px}
+.asmin.form-control{flex:1 1 160px;min-width:0;width:auto;height:30px;padding:3px 8px;font:500 13px var(--font-mono);text-transform:uppercase}
+.asmin::placeholder{text-transform:none}
+.asmmsg{font:12px/1.4 var(--font-mono);color:var(--muted-fg);min-height:1.4em;margin-bottom:8px}
+.asmmsg.err{color:var(--pen);font-family:var(--font-sans)}
+.listing{font:13px/1 var(--font-mono);border-top:1px solid var(--border)}
+.lrow{display:grid;grid-template-columns:20px 18px 5ch 12ch minmax(0,1fr);align-items:center;gap:0 10px;height:24px;border-bottom:1px solid var(--border);white-space:nowrap;cursor:pointer}
+.lrow .ad,.lrow .by{color:var(--muted-fg)}
+.lrow .by{overflow:hidden}
+.lrow .mn{overflow:hidden;text-overflow:ellipsis}
+.lrow .op{font-weight:600}
+.lrow:hover{background:var(--zn-50)}
+.lrow:hover .mn{text-decoration:underline;text-decoration-color:var(--zn-400)}
+.lrow.pc{background:var(--marker);box-shadow:inset 0 0 0 1px var(--marker-edge)}
+.lrow.pc .ad,.lrow.pc .by{color:var(--foreground)}
+.pcg{width:18px;height:22px;border:0;background:transparent;padding:0;margin-left:-10px;cursor:pointer;font:16px/1 var(--font-mono);color:transparent;border-radius:var(--radius-sm)}
+.pcg::before{content:"▸"}
+.lrow:hover .pcg{color:var(--zn-300)}
+.lrow .pcg:hover,.lrow .pcg:focus-visible{color:var(--foreground);background:var(--marker)}
+.lrow.pc .pcg{color:var(--foreground);cursor:grab;touch-action:none}
+.lrow.pc .pcg:hover{background:var(--marker-edge);color:#fff}
+body.pcdrag,body.pcdrag *{cursor:grabbing!important;user-select:none}
+.lrow.dropto{background:var(--zn-100)}
+.lrow.dropto .pcg{color:var(--foreground);background:var(--marker)}
+.asmmsg{margin:0 0 8px;min-height:20px}
+.lrow.editing{background:var(--zn-50)}
+.ined{width:100%;height:20px;font:600 13px/1 var(--font-mono);padding:0 5px;border:1px solid var(--ring);border-radius:var(--radius-sm);background:#fff;color:var(--foreground);outline:none}
+.ac{position:absolute;z-index:1050;min-width:340px;max-width:min(520px,calc(100vw - 32px));background:#fff;border:1px solid var(--border);border-radius:var(--radius);box-shadow:0 8px 24px rgba(0,0,0,.12),0 2px 6px rgba(0,0,0,.06);font-size:12px;overflow:hidden}
+.ac[hidden]{display:none}
+.ac ul{list-style:none;margin:0;padding:4px;max-height:calc(8 * 30px + 8px);overflow-y:auto;overscroll-behavior:contain}
+.ac li{display:grid;grid-template-columns:minmax(13ch,auto) minmax(0,1fr) auto;gap:12px;align-items:center;height:30px;padding:0 8px;border-radius:var(--radius-sm);cursor:pointer;white-space:nowrap}
+.ac li:hover{background:var(--zn-50)}
+.ac li.sel{background:var(--zn-100)}
+.ac .f{font:13px var(--font-mono)}
+.ac .f b{font-weight:600}
+.ac .f i{font-style:italic;color:var(--info)}
+.ac .ds{color:var(--muted-fg);overflow:hidden;text-overflow:ellipsis}
+.ac .ln{color:var(--muted-fg);font:11px var(--font-mono)}
+.ac .ud{font:10px var(--font-sans);color:var(--zn-500);border:1px solid var(--border);border-radius:3px;padding:0 3px;margin-left:6px}
+.ac .foot{display:flex;gap:12px;padding:5px 12px;border-top:1px solid var(--border);color:var(--muted-fg);background:var(--zn-50)}
+.ac kbd{font:10px var(--font-mono);background:#fff;color:var(--foreground);border:1px solid var(--border);border-radius:3px;padding:0 4px;box-shadow:none}
+.asmmsg.ok{color:var(--foreground)}
+.ac li{grid-template-columns:minmax(13ch,auto) minmax(0,1fr) auto 22px}
+.ac .hq{width:20px;height:20px;border-radius:50%;border:1px solid var(--border);background:#fff;color:var(--muted-fg);font:600 11px/1 var(--font-sans);padding:0;cursor:pointer;display:grid;place-items:center}
+.ac .hq:hover,.ac li.sel .hq{border-color:var(--info);color:var(--info)}
+dialog.help{width:min(900px,calc(100vw - 32px));max-height:calc(100vh - 48px);padding:0;border:1px solid var(--border);border-radius:var(--radius-lg,10px);box-shadow:0 20px 50px rgba(0,0,0,.25);color:var(--foreground);background:var(--background)}
+dialog.help::backdrop{background:rgba(9,9,11,.45)}
+.help .hhead{display:flex;justify-content:space-between;align-items:center;padding:12px 18px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--background);z-index:1}
+.help .hhead h2{font:600 11px var(--font-sans);letter-spacing:.12em;text-transform:uppercase;margin:0;color:var(--muted-fg)}
+.help .hx{border:0;background:transparent;font-size:20px;line-height:1;color:var(--muted-fg);cursor:pointer;padding:2px 6px;border-radius:var(--radius-sm)}
+.help .hx:hover{background:var(--zn-100);color:var(--foreground)}
+#help-body{padding:16px 18px 20px}
+.help .hform{font:600 22px var(--font-mono);margin:0}
+.help .hform i{color:var(--info);font-weight:500}
+.help .hsum{margin:4px 0 0;color:var(--muted-fg)}
+.help .hcols{display:grid;grid-template-columns:minmax(0,1fr);gap:20px;margin-top:14px}
+@media (min-width:760px){.help .hcols{grid-template-columns:minmax(0,1fr) 300px}}
+.help h4{font:600 11px var(--font-sans);letter-spacing:.08em;text-transform:uppercase;color:var(--muted-fg);margin:14px 0 4px}
+.help h4:first-child{margin-top:0}
+.help p{margin:0 0 6px;font-size:14px;line-height:1.5}
+.help .hop{font:13px/1.5 var(--font-mono);background:var(--zn-50);border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 10px}
+.help .hnote{font-size:12px;color:var(--muted-fg)}
+.help .hfl{margin:0 0 6px;padding:0;list-style:none;font-size:13px}
+.help .hfl li{margin:2px 0}
+.help .hfl b{display:inline-block;min-width:3.2ch;font:600 12px var(--font-mono)}
+.help .ud{font:10px var(--font-sans);color:var(--zn-500);border:1px solid var(--border);border-radius:3px;padding:1px 4px;vertical-align:middle}
+.hgrid{display:grid;grid-template-columns:repeat(2,52px) 12px repeat(2,52px);grid-template-rows:16px;grid-auto-rows:26px;gap:3px}
+.hcap{font:600 10px var(--font-sans);letter-spacing:.08em;text-transform:uppercase;color:var(--muted-fg);align-self:end}
+.hc,.hf,.hb{border:1px solid var(--border);border-radius:var(--radius-sm);background:#fff;color:var(--zn-400)}
+.hc{display:grid;place-items:center;font:12px var(--font-mono)}
+.rd{background:#dbeafe!important;border-color:var(--info)!important;color:var(--foreground)!important}
+.wr{background:var(--marker)!important;border-color:var(--marker-edge)!important;color:var(--foreground)!important}
+.rw{background:var(--marker)!important;border-color:var(--info)!important;box-shadow:inset 0 0 0 1px var(--info);color:var(--foreground)!important}
+.hflags{display:grid;grid-template-columns:repeat(8,1fr);gap:3px;margin-top:10px;max-width:229px}
+.hf{display:grid;justify-items:center;padding:2px 0;font:10px var(--font-mono)}
+.hf b{font:600 13px var(--font-mono)}
+.hf.undoc span{font-style:italic}
+.hextra{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.hb{padding:5px 9px;font-size:12px;color:var(--foreground);display:grid}
+.hb small{color:var(--muted-fg);font-size:11px}
+.hlegend{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:12px;font-size:11px;color:var(--muted-fg)}
+.hlegend i{display:inline-block;width:12px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px;border:1px solid}
+.tooltip{--bs-tooltip-max-width:260px;font-family:var(--font-sans);pointer-events:none}
+.gut{width:22px;height:22px;border:0;background:transparent;cursor:pointer;display:grid;place-items:center;padding:0}
+.gut::after{content:"";width:9px;height:9px;border-radius:50%;border:1.5px solid transparent}
+.gut:hover::after{border-color:var(--destructive)}
+.lrow.bp .gut::after{background:var(--destructive);border-color:var(--destructive)}
+
+/* memory */
+.dumpwrap{overflow-x:auto}
+.dump{font:13px/1.75 var(--font-mono);white-space:pre;width:max-content;font-variant-numeric:tabular-nums}
+.dump .hd,.dump .ma,.asc{color:var(--muted-fg)}
+.mb{cursor:pointer;border-radius:2px}
+.mb:hover{outline:1px solid var(--zn-400)}
+.mb.z{color:var(--zn-400)}
+.mb.pc{background:var(--marker);color:var(--foreground)}
+.mb.sp{box-shadow:inset 0 -2px 0 var(--info)}
+.mb.w{color:var(--pen);font-weight:600}
+.mb.fl{animation:wflash 900ms ease-out both}
+@keyframes wflash{0%{background:var(--marker-edge);color:#fff;box-shadow:0 0 0 2px var(--marker-edge)}35%{background:var(--marker);color:var(--pen);box-shadow:0 0 0 1px var(--marker-edge)}100%{background:transparent;box-shadow:0 0 0 0 transparent}}
+.mb.fl.pc{animation-name:wflashpc}
+@keyframes wflashpc{0%{background:var(--marker-edge);color:#fff}100%{background:var(--marker)}}
+.mbedit{font:13px var(--font-mono);width:3ch;padding:0;border:0;background:var(--marker);text-transform:uppercase}
+.legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--muted-fg);margin-top:10px}
+.sw{display:inline-block;width:12px;height:10px;margin-right:4px;vertical-align:-1px;border-radius:2px}
+.form-check-inline{margin:0 0 0 4px;display:inline-flex;align-items:center;gap:6px}
+.form-check-inline .form-check-input{margin:0;float:none}
+.form-check-inline label{margin:0;font-size:13px;font-weight:500;color:var(--muted-fg)}
+
+/* stack, io (scandi .table-condensed) */
+.table.wb{font:13px/1.5 var(--font-mono);font-variant-numeric:tabular-nums;margin:0}
+.table.wb th{font-family:var(--font-sans);font-size:11px;padding:6px 10px}
+.table.wb td{padding:3px 10px}
+.table.wb tr.top td{background:var(--marker)}
+.iolog{max-height:220px;overflow:auto;border:1px solid var(--border);border-radius:var(--radius)}
+.empty{color:var(--muted-fg);font-family:var(--font-sans)}
+.term{font:13px/1.5 var(--font-mono);background:var(--zn-900);color:var(--zn-100);border:1px solid var(--zn-900);border-radius:var(--radius);padding:8px 10px;min-height:7.5em;max-height:15em;overflow:auto;white-space:pre-wrap;word-break:break-all;cursor:text;outline:none}
+.term:focus{box-shadow:0 0 0 3px var(--zn-300)}
+.term .cur{display:inline-block;width:.6em;height:1.1em;vertical-align:-.2em;background:var(--zn-500)}
+.term:focus .cur{background:var(--zn-100);animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+.termbar{display:flex;justify-content:space-between;gap:8px;font-size:12px;color:var(--muted-fg);margin:6px 0 10px}
+.termbar .kb{font-family:var(--font-mono)}
+.termbar .waiting{color:var(--info);font-weight:600}
+.dir-in{color:var(--info)}
+#p-io{contain:inline-size}
+footer{margin-top:8px;font-size:12px;color:var(--muted-fg);max-width:90ch}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}.mb.fl{animation:none}}
+</style>
+
+<header class="apphead">
+  <h1 class="logo">Z80<small>Workbench</small></h1>
+  <p>Load a Z80 program at any address and step through it. Registers, flags, memory and the stack update after every instruction. A sample program is loaded at $0000 to start with.</p>
+</header>
+
+<div class="bar" role="toolbar" aria-label="Program controls">
+  <div class="grp">
+    <button class="btn btn-default btn-sm" id="b-open" type="button">Open file…</button>
+    <input type="file" id="f-file" hidden>
+    <select class="form-select speed" id="s-sample" aria-label="Load a sample program">
+      <option value="">Samples…</option>
+      <option value="sumsq">Sum of squares</option>
+      <option value="echo">Echo terminal</option>
+      <option value="wadu">WADUZITDO (BYTE, 1978)</option>
+    </select>
+    <label class="field" for="i-load">Load and start at</label>
+    <div class="input-group addr"><span class="input-group-text">$</span><input class="form-control hexin" id="i-load" value="0000" maxlength="4" spellcheck="false" autocomplete="off"></div>
+  </div>
+  <div class="grp">
+    <button class="btn btn-default btn-sm" id="b-reset" type="button">Reset to $<span id="reset-at">0000</span></button>
+    <button class="btn btn-primary btn-sm" id="b-step" type="button">Step <kbd>S</kbd></button>
+    <button class="btn btn-default btn-sm" id="b-over" type="button">Step over <kbd>O</kbd></button>
+    <button class="btn btn-default btn-sm" id="b-run" type="button">Run <kbd>G</kbd></button>
+    <select class="form-select speed" id="s-speed" aria-label="Run speed">
+      <option value="trace">Trace, 8 steps/s</option>
+      <option value="real">3.5 MHz</option>
+      <option value="max" selected>Full speed</option>
+    </select>
+  </div>
+  <div class="status" aria-live="polite"><span class="label label-default" id="st-pill">Paused</span><span class="msg" id="st-msg"></span></div>
+</div>
+
+<details class="paste">
+  <summary>Type or paste hex bytes</summary>
+  <div class="pastebox">
+    <textarea class="form-control" id="t-hex" spellcheck="false" aria-label="Hex bytes to load"></textarea>
+    <button class="btn btn-default btn-sm" id="b-hex" type="button">Load bytes at $<span id="hexat">0000</span></button>
+  </div>
+</details>
+
+<div class="ac" id="ac" hidden role="listbox" aria-label="Instruction suggestions"><ul id="ac-list"></ul><div class="foot"><span><kbd>↑</kbd> <kbd>↓</kbd> choose</span><span><kbd>Tab</kbd> insert</span><span><kbd>Esc</kbd> close</span><span><kbd>Ctrl</kbd>+<kbd>Space</kbd> show all</span><span><kbd>?</kbd> explain</span></div></div>
+<dialog class="help" id="help" aria-labelledby="help-title"><div class="hhead"><h2 id="help-title">Instruction</h2><button type="button" class="hx" id="help-close" aria-label="Close">×</button></div><div id="help-body"></div></dialog>
+<main class="bench">
+    <section class="panel" id="p-regs" aria-labelledby="h-regs">
+      <div class="panel-heading"><h2 class="panel-title" id="h-regs">Registers</h2></div>
+      <div class="panel-body">
+        <div class="regmap" id="regmap"></div>
+        <div class="flags" id="flags" role="group" aria-label="Flags in PSW (F)"></div>
+        <div class="counters"><span>T-states <b id="c-t">0</b></span><span>Instructions <b id="c-n">0</b></span></div>
+        <p class="hint">Click a value to change it. Click a flag to toggle it.</p>
+      </div>
+    </section>
+    <section class="panel" id="p-stack" aria-labelledby="h-stack">
+      <div class="panel-heading"><h2 class="panel-title" id="h-stack">Stack</h2></div>
+      <div class="panel-body">
+        <table class="table table-condensed wb"><thead><tr><th>Addr</th><th>Word</th><th>Points to</th></tr></thead><tbody id="stack"></tbody></table>
+      </div>
+    </section>
+
+    <section class="panel" id="p-dis" aria-labelledby="h-dis">
+      <div class="panel-heading">
+        <h2 class="panel-title" id="h-dis">Listing</h2>
+        <div class="grp">
+          <div class="input-group addr"><span class="input-group-text">$</span><input class="form-control hexin" id="i-dis" maxlength="4" spellcheck="false" autocomplete="off" placeholder="addr" aria-label="Address to show in the listing"></div>
+          <button class="btn btn-default btn-xs" id="b-goto" type="button">Go to</button>
+          <button class="btn btn-default btn-xs" id="b-follow" type="button">Follow PC</button>
+        </div>
+      </div>
+      <div class="panel-body">
+        <div class="asmmsg" id="asmmsg" aria-live="polite">Click an instruction to edit it.</div>
+        <div class="listing" id="listing"></div>
+        <div class="legend">
+          <span><i class="sw" style="background:var(--destructive);border-radius:50%;width:10px"></i>breakpoint: click the left column</span>
+          <span><i class="sw" style="background:var(--marker);box-shadow:inset 0 0 0 1px var(--marker-edge)"></i>▸ PC: click the ▸ column to move it</span>
+        </div>
+        <p class="hint">Numbers can be written $FF, 0FFh, 0xFF, 255, %11111111 or 'A'. DB and DW work too.</p>
+      </div>
+    </section>
+
+    <section class="panel" id="p-mem" aria-labelledby="h-mem">
+      <div class="panel-heading">
+        <h2 class="panel-title" id="h-mem">Memory</h2>
+        <div class="grp">
+          <div class="input-group addr"><span class="input-group-text">$</span><input class="form-control hexin" id="i-mem" maxlength="4" spellcheck="false" autocomplete="off" aria-label="Show memory from address"></div>
+          <button class="btn btn-default btn-xs" data-go="pc" type="button">PC</button>
+          <button class="btn btn-default btn-xs" data-go="sp" type="button">SP</button>
+          <button class="btn btn-default btn-xs" data-go="hl" type="button">HL</button>
+          <button class="btn btn-default btn-xs" data-go="ix" type="button">IX</button>
+          <button class="btn btn-default btn-xs" id="b-mprev" type="button" aria-label="Previous 256 bytes">−100</button>
+          <button class="btn btn-default btn-xs" id="b-mnext" type="button" aria-label="Next 256 bytes">+100</button>
+          <button class="btn btn-default btn-xs" id="b-clear" type="button">Clear RAM</button>
+          <div class="form-check-inline"><input class="form-check-input" type="checkbox" id="c-fw" checked><label for="c-fw">Follow writes</label></div>
+        </div>
+      </div>
+      <div class="panel-body">
+        <div class="dumpwrap"><div class="dump" id="dump"></div></div>
+        <div class="legend">
+          <span><i class="sw" style="background:var(--marker);box-shadow:inset 0 0 0 1px var(--marker-edge)"></i>next instruction</span>
+          <span><i class="sw" style="box-shadow:inset 0 -2px 0 var(--info)"></i>top of stack</span>
+          <span><i class="sw" style="background:var(--pen)"></i>written by the last step or run</span>
+          <span>Click a byte to change it.</span>
+        </div>
+      </div>
+    </section>
+    <section class="panel" id="p-io" aria-labelledby="h-io">
+      <div class="panel-heading">
+        <h2 class="panel-title" id="h-io">I/O ports</h2>
+        <div class="grp">
+          <label class="field" for="i-in">Other ports read</label>
+          <div class="input-group addr"><span class="input-group-text">$</span><input class="form-control hexin" id="i-in" value="FF" maxlength="2" spellcheck="false" autocomplete="off" style="width:5ch"></div>
+          <button class="btn btn-default btn-xs" id="b-ioclr" type="button">Clear</button>
+        </div>
+      </div>
+      <div class="panel-body">
+        <div class="term" id="term" tabindex="0" role="textbox" aria-label="Terminal. Click and type to send keys to port $01; OUT to port $01 prints here."></div>
+        <div class="termbar"><span id="termhint">Click the terminal and type. Keys wait in a buffer until the program reads them.</span><span class="kb" id="kbuf"></span></div>
+        <div class="iolog"><table class="table table-condensed wb"><thead><tr><th>T-state</th><th></th><th>Port</th><th>Value</th><th>Dec</th><th>Char</th></tr></thead><tbody id="iolog"></tbody></table></div>
+        <p class="hint">Port $00 (status): bit 0 = a key is waiting, bit 1 = ready to print. Port $01 (data): IN reads the next key, OUT prints a character. 13 starts a new line, 8 erases.</p>
+      </div>
+    </section>
+</main>
+
+<footer>Keys: <b>S</b> step, <b>O</b> step over (runs a CALL, RST, DJNZ or block instruction to completion), <b>G</b> run or stop, <b>Esc</b> stop. Drop a raw binary or an Intel HEX file anywhere on the page. Raw binaries load at the address in the toolbar; Intel HEX files load at the addresses inside them. Running stops at HALT and at breakpoints. No interrupts are generated.</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+// ==CORE START==
+const FS=0x80,FZ=0x40,FY=0x20,FH=0x10,FX=0x08,FP=0x04,FN=0x02,FC=0x01;
+const SZ53=new Uint8Array(256),SZ53P=new Uint8Array(256);
+for(let i=0;i<256;i++){let p=0;for(let b=i;b;b>>=1)p^=b&1;SZ53[i]=(i&(FS|FY|FX))|(i?0:FZ);SZ53P[i]=SZ53[i]|(p?0:FP);}
+const sx=v=>v<128?v:v-256;
+
+class Z80{
+  constructor(){this.mem=new Uint8Array(65536);this.wmark=new Uint32Array(65536);this.wseq=new Uint32Array(65536);this.mark=1;this.onOut=null;this.onIn=null;this.reset(0);}
+  reset(pc){
+    this.a=0xFF;this.f=0xFF;this.b=this.c=this.d=this.e=this.h=this.l=0;
+    this.a_=this.f_=this.b_=this.c_=this.d_=this.e_=this.h_=this.l_=0;
+    this.ix=this.iy=0;this.sp=0xFFFF;this.pc=pc&0xFFFF;this.i=this.r=0;
+    this.iff1=this.iff2=0;this.im=0;this.halted=false;this.cycles=0;this.instrs=0;
+  }
+  get bc(){return(this.b<<8)|this.c} set bc(v){this.b=(v>>8)&255;this.c=v&255}
+  get de(){return(this.d<<8)|this.e} set de(v){this.d=(v>>8)&255;this.e=v&255}
+  get hl(){return(this.h<<8)|this.l} set hl(v){this.h=(v>>8)&255;this.l=v&255}
+  get af(){return(this.a<<8)|this.f} set af(v){this.a=(v>>8)&255;this.f=v&255}
+  rb(a){return this.mem[a&0xFFFF]}
+  wb(a,v){a&=0xFFFF;this.mem[a]=v&255;this.wmark[a]=this.mark;this.lastW=a;this.wcount=(this.wcount||0)+1;this.wseq[a]=this.wcount}
+  rw(a){return this.rb(a)|(this.rb(a+1)<<8)}
+  ww(a,v){this.wb(a,v);this.wb(a+1,v>>8)}
+  fetch(){const v=this.mem[this.pc];this.pc=(this.pc+1)&0xFFFF;return v}
+  fetchOp(){this.r=(this.r&0x80)|((this.r+1)&0x7F);return this.fetch()}
+  fetchW(){const lo=this.fetch();return lo|(this.fetch()<<8)}
+  push(v){this.sp=(this.sp-2)&0xFFFF;this.ww(this.sp,v)}
+  pop(){const v=this.rw(this.sp);this.sp=(this.sp+2)&0xFFFF;return v}
+  inp(port){return(this.onIn?this.onIn(port&0xFFFF):0xFF)&255}
+  outp(port,v){if(this.onOut)this.onOut(port&0xFFFF,v&255)}
+  xy(idx){return idx===0?this.hl:idx===1?this.ix:this.iy}
+  setXY(idx,v){v&=0xFFFF;if(idx===0)this.hl=v;else if(idx===1)this.ix=v;else this.iy=v}
+  addr(idx){if(idx===0)return this.hl;const d=sx(this.fetch());return(this.xy(idx)+d)&0xFFFF}
+  getR(i,idx){switch(i){case 0:return this.b;case 1:return this.c;case 2:return this.d;case 3:return this.e;
+    case 4:return idx===0?this.h:this.xy(idx)>>8;case 5:return idx===0?this.l:this.xy(idx)&255;default:return this.a}}
+  setR(i,v,idx){v&=255;switch(i){case 0:this.b=v;break;case 1:this.c=v;break;case 2:this.d=v;break;case 3:this.e=v;break;
+    case 4:if(idx===0)this.h=v;else this.setXY(idx,(this.xy(idx)&0xFF)|(v<<8));break;
+    case 5:if(idx===0)this.l=v;else this.setXY(idx,(this.xy(idx)&0xFF00)|v);break;
+    default:this.a=v}}
+  getRP(p,idx){return p===0?this.bc:p===1?this.de:p===2?this.xy(idx):this.sp}
+  setRP(p,v,idx){v&=0xFFFF;if(p===0)this.bc=v;else if(p===1)this.de=v;else if(p===2)this.setXY(idx,v);else this.sp=v}
+  getRP2(p,idx){return p===3?this.af:this.getRP(p,idx)}
+  setRP2(p,v,idx){if(p===3)this.af=v;else this.setRP(p,v,idx)}
+  cond(y){const f=this.f;switch(y){case 0:return!(f&FZ);case 1:return!!(f&FZ);case 2:return!(f&FC);case 3:return!!(f&FC);
+    case 4:return!(f&FP);case 5:return!!(f&FP);case 6:return!(f&FS);default:return!!(f&FS)}}
+
+  // ---- ALU ----
+  add8(v,c){const a=this.a,r=a+v+c,r8=r&255;
+    this.f=SZ53[r8]|(r>255?FC:0)|((a^v^r8)&FH)|((~(a^v)&(a^r8)&0x80)?FP:0);this.a=r8}
+  sub8(v,c,store){const a=this.a,r=a-v-c,r8=r&255;
+    this.f=SZ53[r8]|FN|(r<0?FC:0)|((a^v^r8)&FH)|(((a^v)&(a^r8)&0x80)?FP:0);
+    if(store)this.a=r8;else this.f=(this.f&~(FX|FY))|(v&(FX|FY))}
+  alu(y,v){switch(y){
+    case 0:this.add8(v,0);break;case 1:this.add8(v,this.f&FC);break;
+    case 2:this.sub8(v,0,true);break;case 3:this.sub8(v,this.f&FC,true);break;
+    case 4:this.a&=v;this.f=SZ53P[this.a]|FH;break;
+    case 5:this.a^=v;this.f=SZ53P[this.a];break;
+    case 6:this.a|=v;this.f=SZ53P[this.a];break;
+    default:this.sub8(v,0,false)}}
+  inc8(v){const r=(v+1)&255;this.f=(this.f&FC)|SZ53[r]|((v&15)===15?FH:0)|(v===0x7F?FP:0);return r}
+  dec8(v){const r=(v-1)&255;this.f=(this.f&FC)|FN|SZ53[r]|((v&15)===0?FH:0)|(v===0x80?FP:0);return r}
+  add16(a,b){const r=a+b;this.f=(this.f&(FS|FZ|FP))|(r>0xFFFF?FC:0)|(((a^b^r)>>8)&FH)|((r>>8)&(FX|FY));return r&0xFFFF}
+  adc16(a,b){const r=a+b+(this.f&FC),r16=r&0xFFFF;
+    this.f=(r>0xFFFF?FC:0)|(((a^b^r16)>>8)&FH)|((~(a^b)&(a^r16)&0x8000)?FP:0)|((r16>>8)&(FS|FX|FY))|(r16?0:FZ);return r16}
+  sbc16(a,b){const r=a-b-(this.f&FC),r16=r&0xFFFF;
+    this.f=FN|(r<0?FC:0)|(((a^b^r16)>>8)&FH)|(((a^b)&(a^r16)&0x8000)?FP:0)|((r16>>8)&(FS|FX|FY))|(r16?0:FZ);return r16}
+  rot(y,v){let r,c;switch(y){
+    case 0:c=v>>7;r=((v<<1)|c)&255;break;
+    case 1:c=v&1;r=(v>>1)|(c<<7);break;
+    case 2:c=v>>7;r=((v<<1)|(this.f&FC))&255;break;
+    case 3:c=v&1;r=(v>>1)|((this.f&FC)<<7);break;
+    case 4:c=v>>7;r=(v<<1)&255;break;
+    case 5:c=v&1;r=(v>>1)|(v&0x80);break;
+    case 6:c=v>>7;r=((v<<1)|1)&255;break;
+    default:c=v&1;r=v>>1}
+    this.f=SZ53P[r]|c;return r}
+  bit(y,v){const r=v&(1<<y);this.f=(this.f&FC)|FH|(v&(FX|FY))|(r?0:(FZ|FP))|(r&FS)}
+  cbop(x,y,v){return x===0?this.rot(y,v):x===2?v&~(1<<y)&255:v|(1<<y)}
+
+  // ---- execution ----
+  step(){
+    if(this.halted){this.r=(this.r&0x80)|((this.r+1)&0x7F);this.cycles+=4;return}
+    let op=this.fetchOp(),idx=0,t=0;
+    while(op===0xDD||op===0xFD){idx=op===0xDD?1:2;t+=4;op=this.fetchOp()}
+    if(op===0xCB)t+=idx?this.execXYCB(idx):this.execCB();
+    else if(op===0xED)t+=this.execED();
+    else t+=this.execMain(op,idx);
+    this.cycles+=t;this.instrs++;
+  }
+  execMain(op,idx){
+    const x=op>>6,y=(op>>3)&7,z=op&7,p=y>>1,q=y&1,X=idx?8:0;
+    if(x===0){
+      switch(z){
+      case 0:{
+        if(y===0)return 4;
+        if(y===1){let t=this.a;this.a=this.a_;this.a_=t;t=this.f;this.f=this.f_;this.f_=t;return 4}
+        const d=sx(this.fetch());
+        if(y===2){this.b=(this.b-1)&255;if(this.b){this.pc=(this.pc+d)&0xFFFF;return 13}return 8}
+        if(y===3||this.cond(y-4)){this.pc=(this.pc+d)&0xFFFF;return 12}
+        return 7}
+      case 1:
+        if(q===0){this.setRP(p,this.fetchW(),idx);return 10}
+        this.setXY(idx,this.add16(this.xy(idx),this.getRP(p,idx)));return 11;
+      case 2:
+        if(q===0){
+          if(p===0){this.wb(this.bc,this.a);return 7}
+          if(p===1){this.wb(this.de,this.a);return 7}
+          if(p===2){this.ww(this.fetchW(),this.xy(idx));return 16}
+          this.wb(this.fetchW(),this.a);return 13;
+        }
+        if(p===0){this.a=this.rb(this.bc);return 7}
+        if(p===1){this.a=this.rb(this.de);return 7}
+        if(p===2){this.setXY(idx,this.rw(this.fetchW()));return 16}
+        this.a=this.rb(this.fetchW());return 13;
+      case 3:this.setRP(p,this.getRP(p,idx)+(q?-1:1),idx);return 6;
+      case 4:case 5:{
+        if(y===6){const ad=this.addr(idx),v=this.rb(ad);this.wb(ad,z===4?this.inc8(v):this.dec8(v));return 11+X}
+        const v=this.getR(y,idx);this.setR(y,z===4?this.inc8(v):this.dec8(v),idx);return 4}
+      case 6:
+        if(y===6){const ad=this.addr(idx);this.wb(ad,this.fetch());return 10+(idx?5:0)}
+        this.setR(y,this.fetch(),idx);return 7;
+      default:{
+        const a=this.a,fl=this.f;
+        switch(y){
+        case 0:{const c=a>>7;this.a=((a<<1)|c)&255;this.f=(fl&(FS|FZ|FP))|(this.a&(FX|FY))|c;break}
+        case 1:{const c=a&1;this.a=(a>>1)|(c<<7);this.f=(fl&(FS|FZ|FP))|(this.a&(FX|FY))|c;break}
+        case 2:{const c=a>>7;this.a=((a<<1)|(fl&FC))&255;this.f=(fl&(FS|FZ|FP))|(this.a&(FX|FY))|c;break}
+        case 3:{const c=a&1;this.a=(a>>1)|((fl&FC)<<7);this.f=(fl&(FS|FZ|FP))|(this.a&(FX|FY))|c;break}
+        case 4:{let corr=0,c=fl&FC,h;
+          if((fl&FH)||(a&15)>9)corr|=0x06;
+          if(c||a>0x99){corr|=0x60;c=FC}
+          let r;if(fl&FN){h=(fl&FH)&&(a&15)<6;r=(a-corr)&255}else{h=(a&15)>9;r=(a+corr)&255}
+          this.a=r;this.f=SZ53P[r]|(h?FH:0)|(fl&FN)|c;break}
+        case 5:this.a=a^255;this.f=(fl&(FS|FZ|FP|FC))|FH|FN|(this.a&(FX|FY));break;
+        case 6:this.f=(fl&(FS|FZ|FP))|FC|(a&(FX|FY));break;
+        default:this.f=(fl&(FS|FZ|FP))|((fl&FC)?FH:FC)|(a&(FX|FY))}
+        return 4}
+      }
+    }
+    if(x===1){
+      if(op===0x76){this.halted=true;this.pc=(this.pc-1)&0xFFFF;return 4}
+      if(y===6){const ad=this.addr(idx);this.wb(ad,this.getR(z,0));return 7+X}
+      if(z===6){const ad=this.addr(idx);this.setR(y,this.rb(ad),0);return 7+X}
+      this.setR(y,this.getR(z,idx),idx);return 4;
+    }
+    if(x===2){
+      if(z===6){this.alu(y,this.rb(this.addr(idx)));return 7+X}
+      this.alu(y,this.getR(z,idx));return 4;
+    }
+    switch(z){
+    case 0:if(this.cond(y)){this.pc=this.pop();return 11}return 5;
+    case 1:
+      if(q===0){this.setRP2(p,this.pop(),idx);return 10}
+      if(p===0){this.pc=this.pop();return 10}
+      if(p===1){let t;
+        t=this.b;this.b=this.b_;this.b_=t;t=this.c;this.c=this.c_;this.c_=t;
+        t=this.d;this.d=this.d_;this.d_=t;t=this.e;this.e=this.e_;this.e_=t;
+        t=this.h;this.h=this.h_;this.h_=t;t=this.l;this.l=this.l_;this.l_=t;return 4}
+      if(p===2){this.pc=this.xy(idx);return 4}
+      this.sp=this.xy(idx);return 6;
+    case 2:{const nn=this.fetchW();if(this.cond(y))this.pc=nn;return 10}
+    case 3:
+      switch(y){
+      case 0:this.pc=this.fetchW();return 10;
+      case 2:{const n=this.fetch();this.outp((this.a<<8)|n,this.a);return 11}
+      case 3:{const n=this.fetch();this.a=this.inp((this.a<<8)|n);return 11}
+      case 4:{const v=this.rw(this.sp);this.ww(this.sp,this.xy(idx));this.setXY(idx,v);return 19}
+      case 5:{const t=this.de;this.de=this.hl;this.hl=t;return 4}
+      case 6:this.iff1=this.iff2=0;return 4;
+      case 7:this.iff1=this.iff2=1;return 4;
+      }
+      return 4;
+    case 4:{const nn=this.fetchW();if(this.cond(y)){this.push(this.pc);this.pc=nn;return 17}return 10}
+    case 5:
+      if(q===0){this.push(this.getRP2(p,idx));return 11}
+      if(p===0){const nn=this.fetchW();this.push(this.pc);this.pc=nn;return 17}
+      return 4;
+    case 6:this.alu(y,this.fetch());return 7;
+    default:this.push(this.pc);this.pc=y*8;return 11;
+    }
+  }
+  execCB(){
+    const op=this.fetchOp(),x=op>>6,y=(op>>3)&7,z=op&7;
+    if(z===6){const ad=this.hl,v=this.rb(ad);
+      if(x===1){this.bit(y,v);this.f=(this.f&~(FX|FY))|((ad>>8)&(FX|FY));return 12}
+      this.wb(ad,this.cbop(x,y,v));return 15}
+    const v=this.getR(z,0);
+    if(x===1){this.bit(y,v);return 8}
+    this.setR(z,this.cbop(x,y,v),0);return 8;
+  }
+  execXYCB(idx){
+    const d=sx(this.fetch()),op=this.fetch(),ad=(this.xy(idx)+d)&0xFFFF,v=this.rb(ad);
+    const x=op>>6,y=(op>>3)&7,z=op&7;
+    if(x===1){this.bit(y,v);this.f=(this.f&~(FX|FY))|((ad>>8)&(FX|FY));return 16}
+    const r=this.cbop(x,y,v);this.wb(ad,r);if(z!==6)this.setR(z,r,0);return 19;
+  }
+  execED(){
+    const op=this.fetchOp(),x=op>>6,y=(op>>3)&7,z=op&7,p=y>>1,q=y&1;
+    if(x===1){
+      switch(z){
+      case 0:{const v=this.inp(this.bc);if(y!==6)this.setR(y,v,0);this.f=(this.f&FC)|SZ53P[v];return 12}
+      case 1:this.outp(this.bc,y===6?0:this.getR(y,0));return 12;
+      case 2:this.hl=q?this.adc16(this.hl,this.getRP(p,0)):this.sbc16(this.hl,this.getRP(p,0));return 15;
+      case 3:{const nn=this.fetchW();if(q)this.setRP(p,this.rw(nn),0);else this.ww(nn,this.getRP(p,0));return 20}
+      case 4:{const v=this.a;this.a=0;this.sub8(v,0,true);return 8}
+      case 5:this.pc=this.pop();this.iff1=this.iff2;return 14;
+      case 6:this.im=[0,0,1,2,0,0,1,2][y];return 8;
+      default:
+        switch(y){
+        case 0:this.i=this.a;return 9;
+        case 1:this.r=this.a;return 9;
+        case 2:this.a=this.i;this.f=(this.f&FC)|SZ53[this.a]|(this.iff2?FP:0);return 9;
+        case 3:this.a=this.r;this.f=(this.f&FC)|SZ53[this.a]|(this.iff2?FP:0);return 9;
+        case 4:{const v=this.rb(this.hl);this.wb(this.hl,((this.a<<4)|(v>>4))&255);this.a=(this.a&0xF0)|(v&15);this.f=(this.f&FC)|SZ53P[this.a];return 18}
+        case 5:{const v=this.rb(this.hl);this.wb(this.hl,((v<<4)|(this.a&15))&255);this.a=(this.a&0xF0)|(v>>4);this.f=(this.f&FC)|SZ53P[this.a];return 18}
+        default:return 8}
+      }
+    }
+    if(x===2&&z<=3&&y>=4)return this.block(y,z);
+    return 8;
+  }
+  block(y,z){
+    const dir=(y&1)?-1:1,rep=y>=6;
+    switch(z){
+    case 0:{const v=this.rb(this.hl);this.wb(this.de,v);
+      this.hl=(this.hl+dir)&0xFFFF;this.de=(this.de+dir)&0xFFFF;this.bc=(this.bc-1)&0xFFFF;
+      const n=(v+this.a)&255;this.f=(this.f&(FS|FZ|FC))|(this.bc?FP:0)|(n&FX)|((n&2)?FY:0);
+      if(rep&&this.bc){this.pc=(this.pc-2)&0xFFFF;return 21}return 16}
+    case 1:{const v=this.rb(this.hl),r=(this.a-v)&255,hf=(this.a^v^r)&FH;
+      this.hl=(this.hl+dir)&0xFFFF;this.bc=(this.bc-1)&0xFFFF;const n=(r-(hf?1:0))&255;
+      this.f=(this.f&FC)|FN|(SZ53[r]&(FS|FZ))|hf|(this.bc?FP:0)|(n&FX)|((n&2)?FY:0);
+      if(rep&&this.bc&&r!==0){this.pc=(this.pc-2)&0xFFFF;return 21}return 16}
+    case 2:{const v=this.inp(this.bc);this.wb(this.hl,v);this.hl=(this.hl+dir)&0xFFFF;this.b=(this.b-1)&255;
+      this.f=SZ53[this.b]|((v&0x80)?FN:0);
+      if(rep&&this.b){this.pc=(this.pc-2)&0xFFFF;return 21}return 16}
+    default:{const v=this.rb(this.hl);this.b=(this.b-1)&255;this.outp(this.bc,v);this.hl=(this.hl+dir)&0xFFFF;
+      this.f=SZ53[this.b]|((v&0x80)?FN:0);
+      if(rep&&this.b){this.pc=(this.pc-2)&0xFFFF;return 21}return 16}
+    }
+  }
+}
+
+// ---- disassembler ----
+const R8=['B','C','D','E','H','L','(HL)','A'],RP=['BC','DE','HL','SP'],RP2=['BC','DE','HL','AF'];
+const CC=['NZ','Z','NC','C','PO','PE','P','M'],ALU=['ADD A,','ADC A,','SUB ','SBC A,','AND ','XOR ','OR ','CP '];
+const ROT=['RLC','RRC','RL','RR','SLA','SRA','SLL','SRL'];
+const BLI=[['LDI','CPI','INI','OUTI'],['LDD','CPD','IND','OUTD'],['LDIR','CPIR','INIR','OTIR'],['LDDR','CPDR','INDR','OTDR']];
+const h2=v=>'$'+(v&255).toString(16).toUpperCase().padStart(2,'0');
+const h4=v=>'$'+(v&0xFFFF).toString(16).toUpperCase().padStart(4,'0');
+function disasm(mem,pc0){
+  let pc=pc0;
+  const rd=()=>mem[(pc++)&0xFFFF],rdw=()=>{const lo=rd();return lo|(rd()<<8)};
+  let op=rd(),idx=0;
+  while((op===0xDD||op===0xFD)&&pc-pc0<4){idx=op===0xDD?1:2;op=rd()}
+  const IXN=idx===1?'IX':'IY',HL=idx?IXN:'HL';
+  let disp=null;
+  const dstr=d=>`(${IXN}${d<0?'-':'+'}${h2(Math.abs(d))})`;
+  const mHL=()=>{if(!idx)return'(HL)';if(disp===null)disp=sx(rd());return dstr(disp)};
+  const r8=(i,sub=true)=>{if(i===6)return mHL();if(idx&&sub){if(i===4)return IXN+'H';if(i===5)return IXN+'L'}return R8[i]};
+  const rp=p=>p===2?HL:RP[p],rp2=p=>p===2?HL:RP2[p];
+  let t='';
+  if(op===0xCB){
+    if(idx){const d=sx(rd()),o=rd(),x=o>>6,y=(o>>3)&7,z=o&7,m=dstr(d);
+      t=x===0?`${ROT[y]} ${m}`:`${['','BIT','RES','SET'][x]} ${y},${m}`;
+      if(x!==1&&z!==6)t+=','+R8[z];
+    }else{const o=rd(),x=o>>6,y=(o>>3)&7,z=o&7;
+      t=x===0?`${ROT[y]} ${R8[z]}`:`${['','BIT','RES','SET'][x]} ${y},${R8[z]}`}
+  }else if(op===0xED){
+    const o=rd(),x=o>>6,y=(o>>3)&7,z=o&7,p=y>>1,q=y&1;
+    if(x===1){
+      switch(z){
+      case 0:t=y===6?'IN (C)':`IN ${R8[y]},(C)`;break;
+      case 1:t=y===6?'OUT (C),0':`OUT (C),${R8[y]}`;break;
+      case 2:t=`${q?'ADC':'SBC'} HL,${RP[p]}`;break;
+      case 3:{const nn=rdw();t=q?`LD ${RP[p]},(${h4(nn)})`:`LD (${h4(nn)}),${RP[p]}`;break}
+      case 4:t='NEG';break;
+      case 5:t=y===1?'RETI':'RETN';break;
+      case 6:t='IM '+[0,0,1,2,0,0,1,2][y];break;
+      default:t=['LD I,A','LD R,A','LD A,I','LD A,R','RRD','RLD','NOP*','NOP*'][y]}
+    }else if(x===2&&z<=3&&y>=4)t=BLI[y-4][z];
+    else t='NOP*';
+  }else{
+    const x=op>>6,y=(op>>3)&7,z=op&7,p=y>>1,q=y&1;
+    if(x===0){
+      switch(z){
+      case 0:
+        if(y===0)t='NOP';else if(y===1)t="EX AF,AF'";
+        else{const d=sx(rd()),tg=(pc+d)&0xFFFF;t=y===2?`DJNZ ${h4(tg)}`:y===3?`JR ${h4(tg)}`:`JR ${CC[y-4]},${h4(tg)}`}
+        break;
+      case 1:t=q?`ADD ${HL},${rp(p)}`:`LD ${rp(p)},${h4(rdw())}`;break;
+      case 2:
+        if(q===0)t=p===0?'LD (BC),A':p===1?'LD (DE),A':p===2?`LD (${h4(rdw())}),${HL}`:`LD (${h4(rdw())}),A`;
+        else t=p===0?'LD A,(BC)':p===1?'LD A,(DE)':p===2?`LD ${HL},(${h4(rdw())})`:`LD A,(${h4(rdw())})`;
+        break;
+      case 3:t=`${q?'DEC':'INC'} ${rp(p)}`;break;
+      case 4:t=`INC ${r8(y)}`;break;
+      case 5:t=`DEC ${r8(y)}`;break;
+      case 6:{const dst=r8(y);t=`LD ${dst},${h2(rd())}`;break}
+      default:t=['RLCA','RRCA','RLA','RRA','DAA','CPL','SCF','CCF'][y]}
+    }else if(x===1){
+      if(op===0x76)t='HALT';
+      else if(y===6||z===6)t=`LD ${r8(y,false)},${r8(z,false)}`;
+      else t=`LD ${r8(y)},${r8(z)}`;
+    }else if(x===2)t=ALU[y]+r8(z);
+    else{
+      switch(z){
+      case 0:t='RET '+CC[y];break;
+      case 1:t=q===0?`POP ${rp2(p)}`:['RET','EXX',`JP (${HL})`,`LD SP,${HL}`][p];break;
+      case 2:t=`JP ${CC[y]},${h4(rdw())}`;break;
+      case 3:
+        switch(y){case 0:t=`JP ${h4(rdw())}`;break;case 2:t=`OUT (${h2(rd())}),A`;break;case 3:t=`IN A,(${h2(rd())})`;break;
+          case 4:t=`EX (SP),${HL}`;break;case 5:t='EX DE,HL';break;case 6:t='DI';break;default:t='EI'}
+        break;
+      case 4:t=`CALL ${CC[y]},${h4(rdw())}`;break;
+      case 5:t=q===0?`PUSH ${rp2(p)}`:`CALL ${h4(rdw())}`;break;
+      case 6:t=ALU[y]+h2(rd());break;
+      default:t='RST '+h2(y*8)}
+    }
+  }
+  return{len:pc-pc0,text:t};
+}
+
+// ---- line assembler ----
+// The instruction table is generated from the disassembler, so the two always agree.
+function asmTokenize(src,here){
+  const up=src.toUpperCase(),out=[];let i=0;
+  while(i<up.length){
+    const c=up[i];
+    if(c===' '||c==='\t'){i++;continue}
+    if(c===';')break;
+    if('(),+-'.includes(c)){out.push({k:'p',v:c});i++;continue}
+    if(c==='"'){const e=src.indexOf('"',i+1);if(e<0)throw new Error('The string has no closing quote.');out.push({k:'str',v:src.slice(i+1,e)});i=e+1;continue}
+    if(c==="'"&&src[i+2]==="'"){out.push({k:'n',v:src.charCodeAt(i+1)});i+=3;continue}
+    const r=up.slice(i);let m;
+    if((m=r.match(/^\$([0-9A-F]+)/))||(m=r.match(/^#([0-9A-F]+)/))||(m=r.match(/^0X([0-9A-F]+)/))){out.push({k:'n',v:parseInt(m[1],16),raw:m[0]});i+=m[0].length;continue}
+    if(c==='$'){out.push({k:'n',v:here});i++;continue}
+    if((m=r.match(/^%([01]+)/))){out.push({k:'n',v:parseInt(m[1],2)});i+=m[0].length;continue}
+    if((m=r.match(/^([0-9][0-9A-F]*)H(?![A-Z0-9_])/))){out.push({k:'n',v:parseInt(m[1],16)});i+=m[0].length;continue}
+    if((m=r.match(/^[0-9]+(?![A-Z0-9_])/))){out.push({k:'n',v:parseInt(m[0],10)});i+=m[0].length;continue}
+    if((m=r.match(/^[A-Z_][A-Z0-9_]*'?/))){out.push({k:'w',v:m[0]});i+=m[0].length;continue}
+    throw new Error(`Unexpected character "${src[i]}".`);
+  }
+  return out;
+}
+let ASM_TABLE=null;
+function asmTable(){
+  if(ASM_TABLE)return ASM_TABLE;
+  const m=new Uint8Array(65536),by={},seen=new Set(),seqs=[],PFX=[0xCB,0xED,0xDD,0xFD];
+  for(let o=0;o<256;o++)if(!PFX.includes(o))seqs.push([o]);
+  for(let o=0;o<256;o++)seqs.push([0xCB,o]);
+  for(let o=0;o<256;o++)seqs.push([0xED,o]);
+  for(const P of[0xDD,0xFD]){for(let o=0;o<256;o++)if(!PFX.includes(o))seqs.push([P,o]);for(let o=0;o<256;o++)seqs.push([P,0xCB,0,o])}
+  for(const s of seqs){
+    m.fill(0,0x8000,0x8008);s.forEach((b,i)=>m[0x8000+i]=b);
+    const d=disasm(m,0x8000);if(d.text.includes('*'))continue;
+    const toks=asmTokenize(d.text,0x8000),mn=toks[0].v;
+    const tpl=toks.map((t,i)=>{
+      if(t.k!=='n')return t;
+      if(mn==='JR'||mn==='DJNZ')return{k:'s',t:'e'};
+      if(i>=2&&toks[i-1].v==='+'&&(toks[i-2].v==='IX'||toks[i-2].v==='IY'))return{k:'s',t:'d'};
+      if(mn==='RST'||!t.raw)return t;
+      return{k:'s',t:t.raw.length>3?'nn':'n'};
+    });
+    const key=tpl.map(t=>t.k==='s'?'<'+t.t+'>':t.v).join(' ');
+    if(seen.has(key))continue;seen.add(key);
+    let pos=s.length===4?2:s.length;
+    for(const t of tpl)if(t.k==='s'){t.pos=pos;pos+=t.t==='nn'?2:1}
+    (by[mn]||(by[mn]=[])).push({tpl,bytes:Array.from(m.slice(0x8000,0x8000+d.len)),len:d.len,text:d.text});
+  }
+  return ASM_TABLE=by;
+}
+function asmMatch(tpl,inp){
+  let i=0,j=0,sign=1;const vals=[];
+  while(i<tpl.length){
+    const t=tpl[i],u=inp[j];if(!u)return null;
+    if(t.k==='s'){
+      let v;
+      if(u.k==='n'){v=u.v;j++}
+      else if(u.k==='p'&&u.v==='-'&&inp[j+1]&&inp[j+1].k==='n'){v=-inp[j+1].v;j+=2}
+      else return null;
+      vals.push({slot:t,v:v*sign});sign=1;i++;continue;
+    }
+    if(t.k==='p'&&t.v==='+'&&tpl[i+1]&&tpl[i+1].t==='d'){
+      if(u.k==='p'&&(u.v==='+'||u.v==='-')){sign=u.v==='-'?-1:1;i++;j++;continue}
+      return null;
+    }
+    if(t.k!==u.k||t.v!==u.v)return null;
+    i++;j++;
+  }
+  return j===inp.length?vals:null;
+}
+function asmVariants(toks){
+  const mn=toks[0].v,out=[toks],t2=[];
+  for(let i=0;i<toks.length;i++){
+    t2.push(toks[i]);
+    if(toks[i].v==='('&&toks[i+1]&&(toks[i+1].v==='IX'||toks[i+1].v==='IY')&&toks[i+2]&&toks[i+2].v===')'){t2.push(toks[i+1],{k:'p',v:'+'},{k:'n',v:0});i++}
+  }
+  out.push(t2);
+  const ops=t2.slice(1),A={k:'w',v:'A'},COMMA={k:'p',v:','};
+  if(['SUB','AND','XOR','OR','CP'].includes(mn)&&ops[0]&&ops[0].v==='A'&&ops[1]&&ops[1].v===',')out.push([t2[0],...ops.slice(2)]);
+  if(['ADD','ADC','SBC'].includes(mn)&&!ops.some(o=>o.v===','))out.push([t2[0],A,COMMA,...ops]);
+  if(mn==='EX'&&ops.length===3&&ops[0].v==='AF'&&ops[2].v==='AF')out.push([t2[0],ops[0],ops[1],{k:'w',v:"AF'"}]);
+  return out;
+}
+function asmData(toks,word){
+  const out=[];let j=1;
+  while(j<toks.length){
+    let u=toks[j];
+    if(u.k==='str'&&!word){for(const ch of u.v)out.push(ch.charCodeAt(0)&255);j++}
+    else{
+      let v;
+      if(u.k==='n'){v=u.v;j++}
+      else if(u.v==='-'&&toks[j+1]&&toks[j+1].k==='n'){v=-toks[j+1].v;j+=2}
+      else throw new Error(`Expected a value, found "${u.v}".`);
+      if(word){if(v<-32768||v>65535)throw new Error(`${v} does not fit in 16 bits.`);out.push(v&255,(v>>8)&255)}
+      else{if(v<-128||v>255)throw new Error(`${v} does not fit in a byte.`);out.push(v&255)}
+    }
+    if(j<toks.length){if(toks[j].v!==',')throw new Error('Separate values with commas.');j++}
+  }
+  if(!out.length)throw new Error('DB and DW need at least one value.');
+  return out;
+}
+function assemble(line,addr){
+  const toks=asmTokenize(line,addr);
+  if(!toks.length)return{bytes:[]};
+  if(toks[0].k!=='w')throw new Error('Start the line with an instruction, e.g. LD A,$12.');
+  const mn=toks[0].v;
+  if(mn==='DB'||mn==='DEFB'||mn==='DEFM')return{bytes:asmData(toks,false)};
+  if(mn==='DW'||mn==='DEFW')return{bytes:asmData(toks,true)};
+  const by=asmTable(),cands=by[mn];
+  if(!cands){
+    const near=Object.keys(by).filter(k=>k.slice(0,2)===mn.slice(0,2)).sort();
+    let hint=near.length?` Similar instructions: ${near.join(', ')}.`:'';
+    if(mn.startsWith('EX'))hint=" The exchange instructions are EX DE,HL, EX AF,AF', EXX and EX (SP),HL.";
+    throw new Error(`${mn} is not a Z80 instruction.${hint}`);
+  }
+  for(const variant of asmVariants(toks))for(const c of cands){
+    const vals=asmMatch(c.tpl,variant);if(!vals)continue;
+    const b=c.bytes.slice();
+    for(const{slot,v}of vals){
+      if(slot.t==='n'){if(v<-128||v>255)throw new Error(`${v} does not fit in a byte.`);b[slot.pos]=v&255}
+      else if(slot.t==='nn'){if(v<-32768||v>65535)throw new Error(`${v} does not fit in 16 bits.`);b[slot.pos]=v&255;b[slot.pos+1]=(v>>8)&255}
+      else if(slot.t==='d'){if(v<-128||v>127)throw new Error(`Index offset ${v} is outside -128..+127.`);b[slot.pos]=v&255}
+      else{let off=(v-addr-c.len)&0xFFFF;if(off>=0x8000)off-=0x10000;
+        if(off<-128||off>127)throw new Error(`${h4(v)} is ${off} bytes away. ${mn} can only reach -128..+127 bytes; use JP for longer jumps.`);
+        b[slot.pos]=off&255}
+    }
+    return{bytes:b};
+  }
+  const forms=[...new Set(cands.map(c=>c.text.replace(/\$[0-9A-F]{4}/g,'nn').replace(/\$[0-9A-F]{2}/g,'n')))];
+  throw new Error(`These operands don't fit ${mn}. Forms include: ${forms.slice(0,6).join(' · ')}${forms.length>6?' …':''}`);
+}
+// ==CORE END==
+
+// ================= UI =================
+const $=id=>document.getElementById(id);
+const hx2=v=>(v&255).toString(16).toUpperCase().padStart(2,'0');
+const hx4=v=>(v&0xFFFF).toString(16).toUpperCase().padStart(4,'0');
+const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+const cpu=new Z80();
+
+// Echo: print a greeting, then read keys from port $01 (polling status port $00) and print each one back.
+//   0000 LD SP,$FF00 / LD HL,msg / loop: LD A,(HL) / OR A / JR Z,echo / CALL putc / INC HL / JR loop
+//   0010 echo: CALL getc / CALL putc / JR echo
+//   0018 getc: IN A,($00) / BIT 0,A / JR Z,getc / IN A,($01) / RET
+//   0021 putc: OUT ($01),A / RET
+//   0024 msg: "Echo ready. Type here:",13,0
+const ECHO=[0x31,0x00,0xFF,0x21,0x24,0x00,0x7E,0xB7,0x28,0x06,0xCD,0x21,0x00,0x23,0x18,0xF6,0xCD,0x18,0x00,0xCD,0x21,0x00,0x18,0xF8,0xDB,0x00,0xCB,0x47,0x28,0xFA,0xDB,0x01,0xC9,0xD3,0x01,0xC9,
+  ...[...'Echo ready. Type here:'].map(c=>c.charCodeAt(0)),13,0];
+// WADUZITDO by Larry Kheriaty, BYTE September 1978, listing 4a (8080 version), as printed except:
+// the SOLOS calls at $0046/$004D go to small port routines at $0106 (key in) and $010E (char out),
+// and LOC ($0100) points the program text at $0112. A demo program is preloaded there.
+const WADU=[0x2A,0x00,0x01,0xCD,0x46,0x00,0xFE,0x5C,0xCA,0x00,0x00,0xFE,0x24,0xCA,0x52,0x00,0xFE,0x5F,0xC2,0x19,0x00,0x2B,0xC3,0x03,0x00,0xFE,0x2F,0xC2,0x24,0x00,0xCD,0xDF,0x00,0xC3,0x03,0x00,0xFE,0x25,0xC2,0x3C,0x00,0x06,0x0D,0x78,0xCD,0x4D,0x00,0x0E,0x40,0xBE,0xCA,0x3C,0x00,0x36,0x00,0x23,0x0D,0xC2,0x31,0x00,0x77,0x23,0xFE,0x0D,0xCC,0xF0,0x00,0xC3,0x03,0x00,0xCD,0x06,0x01,0xCA,0x46,0x00,0x47,0xCD,0x0E,0x01,0x78,0xC9,0x2A,0x00,0x01,0x2B,0x23,0x7E,0xFE,0x2B,0xFA,0x56,0x00,0xFE,0x59,0xCA,0x67,0x00,0xFE,0x4E,0xC2,0x76,0x00,0x23,0xBA,0xCA,0x57,0x00,0x23,0x7E,0xFE,0x0D,0xC2,0x6C,0x00,0xC3,0x56,0x00,0xFE,0x41,0xC2,0x8E,0x00,0x22,0x02,0x01,0xCD,0x46,0x00,0x5F,0x23,0x06,0x0D,0xCD,0x4D,0x00,0xCD,0xF0,0x00,0xC3,0x56,0x00,0xFE,0x4D,0xC2,0xA1,0x00,0x23,0x23,0x7E,0x16,0x59,0xBB,0xCA,0x9E,0x00,0x16,0x4E,0xC3,0x56,0x00,0xFE,0x4A,0xC2,0xC3,0x00,0x23,0x23,0x7E,0xE6,0x0F,0x47,0xC2,0xB5,0x00,0x2A,0x02,0x01,0xC3,0x57,0x00,0x23,0x7E,0xFE,0x2A,0xC2,0xB5,0x00,0x05,0xC2,0xB5,0x00,0xC3,0x56,0x00,0xFE,0x53,0xC2,0xD2,0x00,0x23,0x23,0x7E,0x23,0xC3,0x00,0x00,0xC3,0x57,0x00,0xFE,0x54,0xC2,0xD9,0x00,0x23,0x23,0xCD,0xDF,0x00,0xC3,0x57,0x00,0x0E,0x40,0x46,0x0D,0xCA,0xF0,0x00,0xCD,0x4D,0x00,0x7E,0x23,0xFE,0x0D,0xC2,0xE1,0x00,0x0E,0x00,0x06,0x00,0xCD,0x4D,0x00,0x0D,0xF2,0xF2,0x00,0x06,0x0A,0xC3,0x4D,0x00,0x12,0x01,0x00,0x00,0x00,0x00,0xDB,0x00,0xE6,0x01,0xC8,0xDB,0x01,0xC9,0x78,0xD3,0x01,0xC9];
+const WADU_DEMO="T:WADUZITDO, BYTE SEPTEMBER 1978.\rT:IS THE Z80 AN 8-BIT CPU? (Y/N)\rA:\rM:Y\rYT:RIGHT!\rYJ:1\rT:NO, IT IS 8-BIT. TRY AGAIN.\rJ:0\r*T:WHAT IS 2 + 3?\rA:\rM:5\rYT:FIVE, RIGHT.\rNT:NO, TRY AGAIN.\rNJ:0\rT:THAT'S ALL. TYPE $ TO RUN IT AGAIN.\rS:\r";
+// Sample: HL = 3*3 + 4*4 via a SQUARE subroutine, store at $8000, OUT the result to port 1.
+const SAMPLE=[0x31,0x00,0xFF,0x3E,0x03,0xCD,0x18,0x00,0xE5,0x3E,0x04,0xCD,0x18,0x00,0xD1,0x19,
+  0x22,0x00,0x80,0x7D,0xD3,0x01,0x76,0x00,0x21,0x00,0x00,0x16,0x00,0x5F,0xB7,0xC8,0x47,0x19,0x10,0xFD,0xC9];
+
+let pcDrag=null,startAddr=0,running=false,runMode='max',overTarget=-1,skipBp=-1,follow=true,disStart=0,memStart=0,prev=null,timer=0;
+let inValue=0xFF,ioLog=[],termText='',asmAddr=0,keyBuf=[],lastIdlePoll=-1e9,waitShown=false;
+const PORT_STATUS=0x00,PORT_DATA=0x01,KEYBUF_MAX=64;
+const bps=new Set();
+
+function logIO(dir,port,v){ioLog.push({t:cpu.cycles,dir,port,v});if(ioLog.length>400)ioLog.shift()}
+cpu.onOut=(port,v)=>{
+  logIO('OUT',port,v);
+  if((port&255)!==PORT_DATA)return;
+  if(v===13)termText+='\n';
+  else if(v===10){if(!termText.endsWith('\n'))termText+='\n'}
+  else if(v===8){if(termText&&!termText.endsWith('\n'))termText=termText.slice(0,-1)}
+  else if(v>=32&&v<127)termText+=String.fromCharCode(v);
+  if(termText.length>4000)termText=termText.slice(-4000);
+};
+cpu.onIn=port=>{
+  const p=port&255;
+  if(p===PORT_STATUS){if(!keyBuf.length)lastIdlePoll=cpu.cycles;return 2|(keyBuf.length?1:0)}
+  if(p===PORT_DATA){const v=keyBuf.length?keyBuf.shift():0;logIO('IN',port,v);return v}
+  return inValue;
+};
+// The program counts as waiting for a key if it polled an empty status port within the last 2,000 T-states.
+const isWaiting=()=>!keyBuf.length&&cpu.cycles-lastIdlePoll<2000;
+
+const REGS=[
+  ['f','PSW',2,2,1],['a','A',2,2,2],['b','B',2,1,3],['c','C',2,2,3],['d','D',2,1,4],['e','E',2,2,4],['h','H',2,1,5],['l','L',2,2,5],
+  ['pc','PC',4,1,6,2],['sp','SP',4,1,7,2],['ix','IX',4,1,8,2],['iy','IY',4,1,9,2],['i','IV',2,2,10],['r','R',2,2,11],
+  ['f_',"PSW'",2,4,1],['a_',"A'",2,4,2],['b_',"B'",2,4,3],['c_',"C'",2,5,3],['d_',"D'",2,4,4],['e_',"E'",2,5,4],['h_',"H'",2,4,5],['l_',"L'",2,5,5],
+];
+const FLAGS=[['S',FS],['Z',FZ],['Y',FY,1],['H',FH],['X',FX,1],['P/V',FP],['N',FN],['C',FC]];
+const SNAPKEYS=REGS.map(r=>r[0]);
+const REG_TIPS={
+  f:'PSW (F): the flags register. The individual flags are shown below the map.',
+  a:'A: the accumulator. Arithmetic and logic results end up here.',
+  b:'B: high byte of BC. DJNZ counts down in B.',
+  c:'C: low byte of BC. IN r,(C) and OUT (C),r use it as the port number.',
+  d:'D: high byte of DE.',
+  e:'E: low byte of DE. DE is the destination pointer for LDIR.',
+  h:'H: high byte of HL.',
+  l:'L: low byte of HL. HL is the main memory pointer, as in LD A,(HL).',
+  pc:'PC: program counter, the address of the next instruction.',
+  sp:'SP: stack pointer. PUSH and CALL move it down, POP and RET move it up.',
+  ix:'IX: index register, used as (IX+d).',
+  iy:'IY: index register, used as (IY+d).',
+  i:'IV (I): interrupt vector, the high byte of the IM 2 jump table.',
+  r:'R: memory refresh counter. Its low 7 bits count instruction fetches.',
+};
+for(const k of['b','c','d','e','h','l'])REG_TIPS[k+'_']=`${k.toUpperCase()}': alternate register. EXX swaps BC, DE and HL with BC', DE' and HL'.`;
+REG_TIPS.a_="A': alternate accumulator. EX AF,AF' swaps A and F with A' and F'.";
+REG_TIPS.f_="PSW' (F'): alternate flags. EX AF,AF' swaps A and F with A' and F'.";
+const FLAG_TIPS={
+  S:'Sign: bit 7 of the result.',
+  Z:'Zero: the result was zero.',
+  Y:'Undocumented: a copy of bit 5 of the result.',
+  H:'Half carry: a carry from bit 3 to bit 4. Used by DAA.',
+  X:'Undocumented: a copy of bit 3 of the result.',
+  'P/V':'Parity after logic operations (1 = even number of 1 bits), overflow after arithmetic.',
+  N:'Subtract: the last operation was a subtraction. Used by DAA.',
+  C:'Carry: a carry out of bit 7, or a borrow.',
+};
+const snap=()=>{const o={};for(const k of SNAPKEYS)o[k]=cpu[k];return o};
+
+// build register map
+(function(){
+  const m=$('regmap');let html='';
+  for(const [k,label,w,col,row,span] of REGS){
+    html+=`<div class="cell${span?' wide':''}" style="grid-column:${col}/span ${span||1};grid-row:${row}" data-bs-title="${REG_TIPS[k]} Click to change.">`+
+      `<label for="r-${k}">${label}</label><input id="r-${k}" data-k="${k}" data-w="${w}" maxlength="${w}" spellcheck="false" autocomplete="off" aria-label="Register ${label}"></div>`;
+  }
+  html+=`<div class="notes"><span data-bs-title="Interrupts enabled. EI sets it, DI clears it.">IFF1 <b id="n-iff1">0</b></span> &nbsp; <span data-bs-title="Saved copy of IFF1, restored by RETN.">IFF2 <b id="n-iff2">0</b></span><br>`+
+    `<span data-bs-title="Interrupt mode, set by IM 0, IM 1 or IM 2.">IM <b id="n-im">0</b></span><br>`+
+    `<span data-bs-title="B and C as one 16-bit pair, e.g. the LDIR byte count.">BC <b id="n-bc">0000</b></span><br>`+
+    `<span data-bs-title="D and E as one 16-bit pair, e.g. the LDIR destination.">DE <b id="n-de">0000</b></span><br>`+
+    `<span data-bs-title="H and L as one 16-bit pair, the main memory pointer.">HL <b id="n-hl">0000</b></span></div>`;
+  m.innerHTML=html;
+  $('flags').innerHTML=FLAGS.map(([n,bit,u])=>`<button type="button" class="flag${u?' undoc':''}" data-bit="${bit}" aria-label="Flag ${n}${u?' (undocumented)':''}" data-bs-title="${FLAG_TIPS[n]} Click to toggle."><span>${n}</span><b>0</b></button>`).join('');
+})();
+const regInputs=[...document.querySelectorAll('#regmap input')];
+const flagBtns=[...document.querySelectorAll('#flags .flag')];
+
+function setState(kind,msg){
+  const pill=$('st-pill');pill.className='label '+({paused:'label-default',running:'label-info',halted:'label-danger',break:'label-warning'}[kind]||'label-default');
+  pill.textContent={paused:'Paused',running:'Running',halted:'Halted',break:'Breakpoint'}[kind]||kind;
+  $('st-msg').textContent=msg||'';
+}
+
+function renderRegs(){
+  for(const inp of regInputs){
+    const k=inp.dataset.k,w=+inp.dataset.w,v=cpu[k];
+    if(document.activeElement!==inp)inp.value=w===4?hx4(v):hx2(v);
+    inp.parentElement.classList.toggle('chg',!!prev&&prev[k]!==v);
+  }
+  for(const b of flagBtns){
+    const bit=+b.dataset.bit,on=!!(cpu.f&bit);
+    b.classList.toggle('on',on);b.setAttribute('aria-pressed',on);b.querySelector('b').textContent=on?'1':'0';
+    b.classList.toggle('chg',!!prev&&((prev.f^cpu.f)&bit)!==0);
+  }
+  $('n-iff1').textContent=cpu.iff1;$('n-iff2').textContent=cpu.iff2;$('n-im').textContent=cpu.im;
+  $('n-bc').textContent=hx4(cpu.bc);$('n-de').textContent=hx4(cpu.de);$('n-hl').textContent=hx4(cpu.hl);
+  $('c-t').textContent=cpu.cycles.toLocaleString('en-US');$('c-n').textContent=cpu.instrs.toLocaleString('en-US');
+}
+
+const DIS_ROWS=26;
+function disLines(start){const out=[];let a=start;for(let i=0;i<DIS_ROWS;i++){const d=disasm(cpu.mem,a);out.push({a,...d});a=(a+d.len)&0xFFFF}return out}
+function anchorFor(pc){
+  for(let back=14;back>=1;back--){
+    let a=(pc-back)&0xFFFF;const chain=[];
+    for(let g=0;g<14;g++){const dist=(pc-a)&0xFFFF;if(dist===0||dist>back)break;chain.push(a);a=(a+disasm(cpu.mem,a).len)&0xFFFF}
+    if(a===pc&&chain.length)return chain[Math.max(0,chain.length-4)];
+  }
+  return pc;
+}
+function renderDis(){
+  let lines=disLines(disStart);
+  if(follow){
+    const k=lines.findIndex(l=>l.a===cpu.pc);
+    if(k<0||k>DIS_ROWS-6){disStart=anchorFor(cpu.pc);lines=disLines(disStart)}
+  }
+  // keep what the user is typing in the inline editor across re-renders
+  const old=$('i-asm');let keep=null;
+  if(old)keep={a:+old.dataset.a,v:old.value,s:old.selectionStart,e:old.selectionEnd,f:document.activeElement===old};
+  let html='';
+  for(const l of lines){
+    let bytes='';for(let i=0;i<l.len;i++)bytes+=hx2(cpu.mem[(l.a+i)&0xFFFF])+' ';
+    const sp=l.text.indexOf(' '),op=sp<0?l.text:l.text.slice(0,sp),args=sp<0?'':l.text.slice(sp);
+    const ed=editing&&l.a===asmAddr,bp=bps.has(l.a);
+    const mn=ed?`<input class="ined" id="i-asm" data-a="${l.a}" value="${esc(l.text).replace(/"/g,'&quot;')}" spellcheck="false" autocomplete="off" aria-label="Instruction at $${hx4(l.a)}" aria-describedby="asmmsg">`
+      :`<span class="op">${esc(op)}</span>${esc(args)}`;
+    html+=`<div class="lrow${l.a===cpu.pc?' pc':''}${pcDrag&&pcDrag.over===l.a?' dropto':''}${bp?' bp':''}${ed?' editing':''}" data-a="${l.a}">`+
+      `<button type="button" class="gut" aria-label="${bp?'Remove':'Set'} breakpoint at $${hx4(l.a)}" data-bs-title="${bp?'Breakpoint: Run stops before this instruction. Click to remove it.':'Click to set a breakpoint. Run will stop before this instruction.'}"></button>`+
+      `<button type="button" class="pcg" aria-label="${l.a===cpu.pc?'PC is here':'Set PC to $'+hx4(l.a)}" data-bs-title="${l.a===cpu.pc?'PC: the next instruction to run. Drag this arrow to another line to move PC.':'Click to set PC here. Step or Run continues from this line.'}"></button>`+
+      `<span class="ad">${hx4(l.a)}</span><span class="by">${bytes.trim()}</span><span class="mn">${mn}</span></div>`;
+  }
+  $('listing').innerHTML=html;
+  const ni=$('i-asm');
+  if(ni&&keep&&keep.a===asmAddr){ni.value=keep.v;if(keep.f){ni.focus();try{ni.setSelectionRange(keep.s,keep.e)}catch(_){}}}
+  if(!ni||!editing)acClose();else if(ac.open)acPlace(ni);
+  cleanTips();
+}
+
+let followWrites=true,seenWrites=0;
+// Write flash: each byte written since the last render starts a short highlight.
+// The start time is kept so the animation continues smoothly across re-renders.
+const FLASH_MS=900,flashAt=new Map();let flashSeq=0;
+function renderMem(){
+  const now=performance.now(),flashOn=!(running&&runMode==='max');
+  // Follow writes: if new bytes were written outside the visible 256 bytes, move the window there.
+  const wc=cpu.wcount||0;
+  if(wc!==seenWrites){
+    seenWrites=wc;
+    const a=cpu.lastW;
+    if(followWrites&&((a-memStart)&0xFFFF)>=256)memStart=((a&0xFFF0)-0x40)&0xFFFF;
+  }
+  const pcLen=disasm(cpu.mem,cpu.pc).len;
+  const inPC=a=>((a-cpu.pc)&0xFFFF)<pcLen,inSP=a=>((a-cpu.sp)&0xFFFF)<2;
+  let html='<span class="hd">      '+[...Array(16)].map((_,i)=>' '+i.toString(16).toUpperCase()).join(' ').replace(/^(.{23})/,'$1 ')+'</span>\n';
+  for(let r=0;r<16;r++){
+    const base=(memStart+r*16)&0xFFFF;let line=`<span class="ma">${hx4(base)}</span>  `,asc='';
+    for(let i=0;i<16;i++){
+      const a=(base+i)&0xFFFF,v=cpu.mem[a];
+      let cls='mb',sty='';if(cpu.wmark[a]===cpu.mark&&prev)cls+=' w';if(inPC(a))cls+=' pc';if(inSP(a))cls+=' sp';if(!v)cls+=' z';
+      if(flashOn&&cpu.wseq[a]>flashSeq)flashAt.set(a,now);
+      const ft=flashAt.get(a);
+      if(ft!==undefined){const age=now-ft;if(age<FLASH_MS){cls+=' fl';sty=` style="animation-delay:${-Math.round(age)}ms"`}else flashAt.delete(a)}
+      line+=`<span class="${cls}"${sty} data-a="${a}" data-bs-title="$${hx4(a)} = $${hx2(v)} = ${v}${v>=32&&v<127?' = '+esc(String.fromCharCode(v)).replace(/"/g,'&quot;'):''}. Click to change.">${hx2(v)}</span>`+(i===7?'  ':' ');
+      asc+=v>=32&&v<127?esc(String.fromCharCode(v)):'·';
+    }
+    html+=line+` <span class="asc">${asc}</span>\n`;
+  }
+  flashSeq=cpu.wcount||0;
+  for(const [a,t] of flashAt)if(now-t>=FLASH_MS)flashAt.delete(a);
+  $('dump').innerHTML=html;cleanTips();
+  if(document.activeElement!==$('i-mem'))$('i-mem').value=hx4(memStart);
+}
+
+function renderStack(){
+  let html='';
+  for(let i=0;i<8;i++){
+    const a=(cpu.sp+i*2)&0xFFFF,w=cpu.rw(a),d=disasm(cpu.mem,w);
+    html+=`<tr${i===0?' class="top"':''}><td>${i===0?'SP→':'+'+(i*2)} ${hx4(a)}</td><td>${hx4(w)}</td><td>${esc(d.text)}</td></tr>`;
+  }
+  $('stack').innerHTML=html;
+}
+
+let ioShown=-1;
+const keyName=v=>v===13?'⏎':v===8?'⌫':v===9?'⇥':v===27?'Esc':v>=32&&v<127?String.fromCharCode(v):h2(v);
+function renderIO(){
+  const waiting=running&&isWaiting();
+  const key=`${ioLog.length}:${ioLog.length?ioLog[ioLog.length-1].t:0}:${termText.length}:${termText.slice(-1)}:${keyBuf.join(',')}:${waiting}`;
+  if(key===ioShown)return;ioShown=key;
+  const term=$('term');term.innerHTML=esc(termText)+'<span class="cur"></span>';term.scrollTop=term.scrollHeight;
+  $('kbuf').textContent=keyBuf.length?`Buffer: ${keyBuf.map(keyName).join(' ')}`:'';
+  const th=$('termhint');th.classList.toggle('waiting',waiting);
+  th.textContent=waiting?`The program is waiting for a key at ${h4(cpu.pc)}. Type in the terminal.`:'Click the terminal and type. Keys wait in a buffer until the program reads them.';
+  if(!ioLog.length){$('iolog').innerHTML='<tr><td colspan="6" class="empty">No I/O yet.</td></tr>';return}
+  $('iolog').innerHTML=ioLog.slice(-100).map(e=>`<tr><td>${e.t.toLocaleString('en-US')}</td><td class="${e.dir==='IN'?'dir-in':''}">${e.dir}</td><td>${h2(e.port&255)}</td><td>${h2(e.v)}</td><td>${e.v}</td><td>${e.v>=32&&e.v<127?esc(String.fromCharCode(e.v)):'·'}</td></tr>`).join('');
+  const w=document.querySelector('.iolog');w.scrollTop=w.scrollHeight;
+}
+
+function render(){renderRegs();renderDis();renderMem();renderStack();renderIO();updateRunButton()}
+// Only touch the button when its label changes: rebuilding it on every frame while running
+// replaces the element under the mouse between press and release, so the click never fires.
+let runLabel='';
+function updateRunButton(){
+  const want=running?'Stop':'Run';if(want===runLabel)return;runLabel=want;
+  $('b-run').innerHTML=`${want} <kbd>G</kbd>`;
+}
+
+// ---- execution control ----
+function beginAction(){prev=snap();cpu.mark++}
+// The halted state belongs to the HALT at PC. If that byte has been changed (e.g. assembled over), end it.
+function checkHalt(){
+  if(cpu.halted&&cpu.mem[cpu.pc]!==0x76)cpu.halted=false;
+  if(cpu.halted){setState('halted',`The CPU is halted at ${h4(cpu.pc)}. Press Reset, or click ▸ on a line in the listing to continue from there.`);return true}
+  return false;
+}
+function doStep(){
+  if(running)return;
+  if(checkHalt())return;
+  const what=disasm(cpu.mem,cpu.pc).text;
+  beginAction();cpu.step();follow=true;
+  if(cpu.halted)setState('halted',`Halted at ${h4(cpu.pc)}`);else setState('paused',`Executed ${what}`);
+  render();
+}
+function isCallLike(pc){
+  const op=cpu.mem[pc];
+  if(op===0xCD||(op&0xC7)===0xC4||(op&0xC7)===0xC7||op===0x10)return true;
+  if(op===0xED)return(cpu.mem[(pc+1)&0xFFFF]&0xF4)===0xB0;
+  return false;
+}
+function doStepOver(){
+  if(running)return;
+  if(!isCallLike(cpu.pc))return doStep();
+  overTarget=(cpu.pc+disasm(cpu.mem,cpu.pc).len)&0xFFFF;startRun();
+}
+function startRun(){
+  if(running)return;
+  if(checkHalt()){overTarget=-1;return}
+  beginAction();running=true;skipBp=cpu.pc;waitShown=false;
+  setState('running',overTarget>=0?`Running until ${h4(overTarget)}`:'');updateRunButton();tick();
+}
+function stopRun(kind,msg){
+  running=false;overTarget=-1;follow=true;clearTimeout(timer);
+  setState(kind,msg);render();
+}
+function runSome(budget){
+  const t0=performance.now(),c0=cpu.cycles;let n=0;
+  while(running){
+    const pc=cpu.pc;
+    if(pc!==skipBp&&bps.has(pc)){stopRun('break',`Stopped at breakpoint ${h4(pc)}`);return}
+    if(overTarget>=0&&pc===overTarget){stopRun('paused',`Stepped over to ${h4(pc)}`);return}
+    skipBp=-1;cpu.step();
+    if(cpu.halted){stopRun('halted',`Halted at ${h4(cpu.pc)}`);return}
+    if(cpu.cycles-c0>=budget)break;
+    if((++n&1023)===0&&performance.now()-t0>12)break;
+  }
+}
+function tick(){
+  if(!running)return;
+  if(runMode==='trace'){runSome(1);if(running){follow=true;render();showWaiting();timer=setTimeout(tick,125)}return}
+  runSome(runMode==='real'?58333:Infinity);
+  if(running){follow=true;render();showWaiting();requestAnimationFrame(tick)}
+}
+function showWaiting(){
+  const w=isWaiting();if(w===waitShown)return;waitShown=w;
+  setState('running',w?`Waiting for a key at ${h4(cpu.pc)}. Click the terminal and type.`:'');
+  if(w&&document.activeElement===document.body)$('term').focus();
+}
+function doReset(){
+  if(running){running=false;clearTimeout(timer)}
+  const want=parseHexAddr($('i-load').value);if(want!==null)startAddr=want;
+  overTarget=-1;cpu.reset(startAddr);prev=null;cpu.mark++;follow=true;keyBuf=[];
+  setState('paused',`Reset. PC = ${h4(startAddr)}`);render();
+}
+
+// ---- loading ----
+function parseHexAddr(s){const t=s.trim().replace(/^(\$|0x|&h)/i,'').replace(/h$/i,'');return /^[0-9a-f]{1,4}$/i.test(t)?parseInt(t,16):null}
+function getLoadAddr(){const v=parseHexAddr($('i-load').value);return v===null?0:v}
+function finishLoad(at,msg){
+  running=false;clearTimeout(timer);overTarget=-1;
+  startAddr=at;cpu.reset(at);cpu.mark++;prev=null;follow=true;memStart=at&0xFFF0;
+  $('i-load').value=hx4(at);$('hexat').textContent=hx4(at);$('reset-at').textContent=hx4(at);asmSet(at);editing=false;
+  setState('paused',msg);render();
+}
+function loadBytes(bytes,at,label){
+  const n=Math.min(bytes.length,0x10000-at);
+  for(let i=0;i<n;i++)cpu.mem[at+i]=bytes[i];
+  finishLoad(at,`Loaded ${label}: ${n} bytes at ${h4(at)}`+(n<bytes.length?` (${bytes.length-n} bytes past $FFFF were dropped)`:'')+`. PC = ${h4(at)}`);
+}
+function parseIHex(text){
+  const pairs=[];let start=null,base=0;
+  for(const raw of text.split(/\r?\n/)){
+    const line=raw.trim();if(!line.startsWith(':'))continue;
+    const b=line.slice(1).match(/../g).map(x=>parseInt(x,16));
+    const len=b[0],addr=(b[1]<<8)|b[2],type=b[3];
+    if(type===0){for(let i=0;i<len;i++)pairs.push([(base+addr+i)&0xFFFF,b[4+i]]);if(start===null)start=(base+addr)&0xFFFF}
+    else if(type===1)break;
+    else if(type===2)base=((b[4]<<8)|b[5])<<4;
+  }
+  return{pairs,start};
+}
+async function loadFile(file){
+  const buf=new Uint8Array(await file.arrayBuffer());
+  const head=new TextDecoder().decode(buf.slice(0,64));
+  if(/\.(hex|ihx|ihex)$/i.test(file.name)||/^\s*:[0-9A-Fa-f]{10}/.test(head)){
+    const {pairs,start}=parseIHex(new TextDecoder().decode(buf));
+    if(!pairs.length){setState('paused',`${file.name} has no Intel HEX data records. Nothing was loaded.`);return}
+    for(const [a,v] of pairs)cpu.mem[a]=v;
+    finishLoad(start,`Loaded ${file.name} (Intel HEX): ${pairs.length} bytes. PC = ${h4(start)}`);
+  }else{
+    if(!buf.length){setState('paused',`${file.name} is empty. Nothing was loaded.`);return}
+    loadBytes(buf,getLoadAddr(),file.name);
+  }
+}
+function loadHexText(){
+  const toks=$('t-hex').value.replace(/;[^\n]*/g,' ').replace(/0x/gi,' ').replace(/[^0-9a-fA-F]+/g,' ').trim().split(/\s+/).filter(Boolean);
+  const bytes=[];
+  for(const t of toks){if(t.length%2){setState('paused',`"${t}" is not a whole number of bytes. Write each byte as two hex digits.`);return}
+    for(let i=0;i<t.length;i+=2)bytes.push(parseInt(t.slice(i,i+2),16))}
+  if(!bytes.length){setState('paused','There are no hex bytes to load.');return}
+  loadBytes(bytes,getLoadAddr(),'typed bytes');
+}
+
+// ---- events ----
+$('b-open').onclick=()=>$('f-file').click();
+$('f-file').onchange=e=>{const f=e.target.files[0];if(f)loadFile(f);e.target.value=''};
+$('i-load').oninput=()=>{const v=parseHexAddr($('i-load').value),t=v===null?'????':hx4(v);$('hexat').textContent=t;$('reset-at').textContent=t};
+$('i-load').addEventListener('keydown',e=>{if(e.key==='Enter'&&parseHexAddr(e.target.value)!==null)doReset()});
+$('b-hex').onclick=loadHexText;
+$('b-reset').onclick=doReset;
+$('b-step').onclick=doStep;
+$('b-over').onclick=doStepOver;
+$('b-run').onclick=()=>running?stopRun('paused',`Stopped at ${h4(cpu.pc)}`):startRun();
+$('s-speed').onchange=e=>{runMode=e.target.value;try{localStorage.setItem('z80wb-speed',runMode)}catch(_){}};
+try{const s=localStorage.getItem('z80wb-speed');if(s){runMode=s;$('s-speed').value=s}}catch(_){}
+
+for(const inp of regInputs){
+  inp.addEventListener('keydown',e=>{if(e.key==='Enter')inp.blur();if(e.key==='Escape'){inp.value='';inp.blur()}});
+  inp.addEventListener('blur',()=>{
+    const v=parseHexAddr(inp.value);
+    if(v!==null&&inp.value!==''){const w=+inp.dataset.w;cpu[inp.dataset.k]=v&(w===4?0xFFFF:0xFF);if(inp.dataset.k==='pc'){cpu.halted=false;follow=true}}
+    render();
+  });
+}
+$('flags').addEventListener('click',e=>{const b=e.target.closest('.flag');if(!b)return;cpu.f^=+b.dataset.bit;render()});
+
+$('listing').addEventListener('click',e=>{
+  const g=e.target.closest('.gut');
+  if(g){const a=+g.parentElement.dataset.a;bps.has(a)?bps.delete(a):bps.add(a);renderDis();return}
+  const p=e.target.closest('.pcg');
+  if(p){const a=+p.parentElement.dataset.a;if(a!==cpu.pc)setPC(a);return}
+  if(e.target.closest('.ined'))return;
+  const row=e.target.closest('.lrow');if(!row)return;
+  startEdit(+row.dataset.a);
+});
+
+// ---- inline assembler: the clicked line's instruction becomes an input ----
+let editing=false;
+function asmSet(a){asmAddr=a&0xFFFF}
+function asmMsg(text,err){const m=$('asmmsg');m.textContent=text;m.classList.toggle('err',!!err);m.classList.remove('ok')}
+function focusEditor(){const i=$('i-asm');if(i){i.focus();i.select()}}
+function startEdit(a){
+  asmSet(a);editing=true;asmMsg(`Editing ${h4(asmAddr)}. Tab completes, Enter writes, Esc closes.`);
+  showInListing(asmAddr);renderDis();focusEditor();
+}
+function stopEdit(){editing=false;acClose();asmMsg('Click an instruction to edit it.');renderDis()}
+function showInListing(a){
+  const lines=disLines(disStart),k=lines.findIndex(l=>l.a===a);
+  if(k<0||k>DIS_ROWS-4){follow=false;disStart=anchorFor(a)}
+}
+function doAssemble(){
+  const inp=$('i-asm');if(!inp)return;
+  const at=asmAddr,line=inp.value;let r;
+  try{r=assemble(line,at)}catch(err){asmMsg(`${h4(at)}: ${err.message}`,true);return}
+  if(!r.bytes.length){asmMsg('Type an instruction, e.g. EX DE,HL. Esc closes the editor.',true);return}
+  if(running){running=false;clearTimeout(timer);overTarget=-1;setState('paused',`Stopped at ${h4(cpu.pc)} to assemble`)}
+  beginAction();
+  r.bytes.forEach((b,i)=>cpu.wb(at+i,b));
+  if(cpu.halted&&cpu.mem[cpu.pc]!==0x76){cpu.halted=false;setState('paused',`PC = ${h4(cpu.pc)}. Ready to step or run.`)}
+  asmMsg(`Wrote ${hx4(at)}: ${r.bytes.map(hx2).join(' ')}  ${disasm(cpu.mem,at).text}`);
+  const next=(at+r.bytes.length)&0xFFFF;
+  asmSet(next);showInListing(next);render();focusEditor();
+}
+$('listing').addEventListener('keydown',e=>{
+  if(!e.target.classList||!e.target.classList.contains('ined'))return;
+  if(acKey(e,e.target))return;
+  if(e.key==='Enter'){e.preventDefault();doAssemble()}
+  else if(e.key==='Escape'){e.preventDefault();stopEdit()}
+  else if(e.key==='ArrowDown'||e.key==='ArrowUp'){
+    e.preventDefault();
+    const a=e.key==='ArrowDown'?(asmAddr+disasm(cpu.mem,asmAddr).len)&0xFFFF:prevInstr(asmAddr);
+    asmSet(a);asmMsg(`Editing ${h4(a)}. Tab completes, Enter writes, Esc closes.`);showInListing(a);renderDis();focusEditor();
+  }
+});
+// ---- auto-completion for the inline assembler ----
+// Suggestions come from the same table the assembler uses, so every suggestion assembles.
+// Slots: n = byte, nn = word, d = signed IX/IY offset, addr = JR/DJNZ target.
+const MN_DESC={
+  ADC:'Add with carry',ADD:'Add',AND:'Bitwise AND with A',BIT:'Test bit: Z = 1 if the bit is 0',CALL:'Call subroutine (push return address)',
+  CCF:'Complement (flip) the carry flag',CP:'Compare with A (subtract, keep only flags)',CPD:'Compare A with (HL), HL−1, BC−1',CPDR:'Search memory downwards for A',
+  CPI:'Compare A with (HL), HL+1, BC−1',CPIR:'Search memory upwards for A',CPL:'Complement (invert) A',DAA:'Decimal adjust A after BCD add/subtract',
+  DEC:'Decrement by 1',DI:'Disable interrupts',DJNZ:'Decrement B, jump if not zero (loops)',EI:'Enable interrupts',
+  EX:'Exchange registers (swap)',EXX:"Exchange BC, DE, HL with BC', DE', HL' (swap)",HALT:'Halt until interrupt',IM:'Set interrupt mode',
+  IN:'Input from a port',INC:'Increment by 1',IND:'Input to (HL), HL−1, B−1',INDR:'Block input, downwards',INI:'Input to (HL), HL+1, B−1',INIR:'Block input, upwards',
+  JP:'Jump',JR:'Jump relative (−128…+127)',LD:'Load (copy) a value',LDD:'Copy (HL) to (DE), HL−1, DE−1, BC−1',LDDR:'Block copy (move) downwards',
+  LDI:'Copy (HL) to (DE), HL+1, DE+1, BC−1',LDIR:'Block copy (move) or fill memory upwards',NEG:'Negate A (two\'s complement)',NOP:'No operation',
+  OR:'Bitwise OR with A',OTDR:'Block output, downwards',OTIR:'Block output, upwards',OUT:'Output to a port',OUTD:'Output (HL), HL−1, B−1',OUTI:'Output (HL), HL+1, B−1',
+  POP:'Pop register pair from the stack',PUSH:'Push register pair onto the stack',RES:'Reset (clear) a bit',RET:'Return from subroutine',
+  RETI:'Return from interrupt',RETN:'Return from non-maskable interrupt',RL:'Rotate left through carry',RLA:'Rotate A left through carry',
+  RLC:'Rotate left circular',RLCA:'Rotate A left circular',RLD:'Rotate BCD digits left between A and (HL)',RR:'Rotate right through carry',
+  RRA:'Rotate A right through carry',RRC:'Rotate right circular',RRCA:'Rotate A right circular',RRD:'Rotate BCD digits right between A and (HL)',
+  RST:'Restart: call a fixed address',SBC:'Subtract with carry (borrow)',SCF:'Set the carry flag',SET:'Set a bit',SLA:'Shift left arithmetic',
+  SLL:'Shift left, bit 0 set (undocumented)',SRA:'Shift right arithmetic (keeps sign)',SRL:'Shift right logical',SUB:'Subtract from A',XOR:'Bitwise XOR with A',
+  DB:'Define bytes (data)',DW:'Define 16-bit words (data)'};
+const SLOT_NAME={n:'n',nn:'nn',d:'d',e:'addr'};
+let AC_LIST=null;
+function acList(){
+  if(AC_LIST)return AC_LIST;
+  const by=asmTable(),list=[],seen=new Set();let order=0;
+  for(const mn of Object.keys(by)){
+    for(const e of by[mn]){
+      const hasSlot=e.tpl.some(t=>t.k==='s');
+      const parts=[];   // {t:'lit'|'slot', v}
+      if(hasSlot){
+        parts.push({t:'lit',v:mn});
+        e.tpl.slice(1).forEach((t,i)=>{if(i===0)parts.push({t:'lit',v:' '});parts.push(t.k==='s'?{t:'slot',v:SLOT_NAME[t.t]}:{t:'lit',v:t.k==='n'?String(t.v):t.v})});
+      }else parts.push({t:'lit',v:e.text});
+      const text=parts.map(x=>x.v).join('');
+      if(seen.has(text))continue;seen.add(text);
+      const undoc=/\b(IXH|IXL|IYH|IYL|SLL)\b|^IN F|^OUT \(C\),0/.test(e.text)||(e.len===4&&e.bytes[1]===0xCB&&(e.bytes[3]&7)!==6);
+      list.push({mn,parts,text,len:e.len,undoc,order:order++,e});
+    }
+  }
+  list.push({mn:'DB',parts:[{t:'lit',v:'DB '},{t:'slot',v:'n'}],text:'DB n',len:1,undoc:false,order:order++});
+  list.push({mn:'DW',parts:[{t:'lit',v:'DW '},{t:'slot',v:'nn'}],text:'DW nn',len:2,undoc:false,order:order++});
+  return AC_LIST=list;
+}
+// Nothing typed + Ctrl+Space: one line per instruction, A to Z. Choosing one opens its forms.
+let AC_SUMMARY=null;
+function acSummary(){
+  if(AC_SUMMARY)return AC_SUMMARY;
+  const g=new Map();
+  for(const x of acList()){const e=g.get(x.mn)||{n:0,undoc:true,single:null};e.n++;e.undoc=e.undoc&&x.undoc;e.single=x;g.set(x.mn,e)}
+  return AC_SUMMARY=[...g.keys()].sort().map(mn=>{const e=g.get(mn);
+    return{mn,summary:true,count:e.n,undoc:e.undoc,parts:[{t:'lit',v:mn}],text:mn,len:e.single.len,only:e.n===1?e.single:null}});
+}
+// "ld  a , ( ix + 5 )" -> "LD A,(IX+5)": one space after the mnemonic, none inside the operands.
+function acNorm(s){
+  const m=s.toUpperCase().match(/^\s*(\S+)(\s*)(.*)$/);if(!m)return '';
+  const rest=m[3].replace(/\s+/g,'');
+  return m[1]+(rest?' '+rest:(m[2]?' ':''));
+}
+// Can the typed text be the beginning of this form? Slots accept any value text.
+// With fill=true it returns the form's text with the values already typed put into their slots.
+function acPrefix(parts,typed,fill){
+  const toks=[];for(const p of parts)if(p.t==='slot')toks.push(p);else for(const c of p.v.toUpperCase())toks.push({t:'c',v:c});
+  const vals=[];
+  const go=(i,j)=>{
+    if(j===typed.length)return true;
+    if(i===toks.length)return false;
+    const t=toks[i];
+    if(t.t==='slot'){                       // a value: starts like a number, runs to the next , ) or end
+      if(!/[0-9$#%'\-]/.test(typed[j]))return false;
+      let k=j;while(k<typed.length&&!',)'.includes(typed[k]))k++;
+      vals.push({i,v:typed.slice(j,k),done:k>j});
+      if(k===typed.length)return true;
+      return go(i+1,k)||(vals.pop(),false);
+    }
+    const c=typed[j];
+    if(t.v===c)return go(i+1,j+1);
+    if(t.v==='+'&&c==='-'&&toks[i+1]&&toks[i+1].t==='slot'){            // (IX-5) fits (IX+d)
+      if(go(i+1,j+1)){const x=vals.find(x=>x.i===i+1);if(x)x.v='-'+x.v;return true}return false;
+    }
+    if(t.v==='+'&&c===')'&&toks[i+1]&&toks[i+1].t==='slot'){vals.push({i:i+1,v:'0',done:true});return go(i+2,j)||(vals.pop(),false)} // (IX) fits (IX+d)
+    if(t.v===' '&&j===typed.length)return true;
+    return false;
+  };
+  const ok=go(0,0);
+  if(!fill)return ok;
+  if(!ok)return null;
+  return toks.map((t,i)=>{if(t.t!=='slot')return t.v;const x=vals.find(x=>x.i===i);return x&&x.done?x.v.replace(/^--/,'-'):t.v}).join('').replace(/\+-/,'-');
+}
+function acFilter(raw,all){
+  const list=acList(),typed=acNorm(raw);
+  if(all&&!typed)return acSummary();
+  if(!typed)return [];
+  const mnTyped=typed.split(' ')[0];
+  let hits=list.filter(x=>acPrefix(x.parts,typed));
+  if(!hits.length&&!typed.includes(' ')&&typed.length>=2){
+    // nothing starts that way: try inside mnemonics (XX finds EXX), then the descriptions (SWAP, COPY, EXCH…)
+    const w=typed.toLowerCase();
+    hits=list.filter(x=>x.mn.includes(typed));
+    if(!hits.length&&w.length>=3){
+      const stem=w.slice(0,4);
+      const got=new Set();   // one entry per instruction, or LD's 180 forms would bury the rest
+      hits=list.filter(x=>!x.undoc&&!got.has(x.mn)&&(MN_DESC[x.mn]||'').toLowerCase().split(/[^a-z]+/).some(word=>word.startsWith(stem))&&got.add(x.mn));
+    }
+  }
+  const rank=x=>(x.mn===mnTyped?0:1)*4+(x.undoc?2:0);
+  return hits.sort((a,b)=>rank(a)-rank(b)||a.order-b.order).slice(0,200);
+}
+const ac={open:false,items:[],sel:0,moved:false,input:null};
+function acRender(){
+  const ul=$('ac-list');
+  ul.innerHTML=ac.items.map((x,i)=>`<li role="option" data-i="${i}"${i===ac.sel?' class="sel" aria-selected="true"':''}><span class="f">${x.parts.map((p,k)=>p.t==='slot'?`<i>${esc(p.v)}</i>`:k===0?`<b>${esc(p.v.split(' ')[0])}</b>${esc(p.v.slice(p.v.split(' ')[0].length))}`:esc(p.v)).join('')}${x.undoc?'<span class="ud">undoc</span>':''}</span><span class="ds">${esc(MN_DESC[x.mn]||'')}</span><span class="ln">${x.summary&&!x.only?x.count+' forms':x.len+' byte'+(x.len>1?'s':'')}</span><button type="button" class="hq" tabindex="-1" aria-label="Explain ${esc(x.text)}" title="Explain">?</button></li>`).join('');
+  const li=ul.children[ac.sel];if(li){const top=li.offsetTop,bot=top+li.offsetHeight;if(top<ul.scrollTop)ul.scrollTop=top-4;else if(bot>ul.scrollTop+ul.clientHeight)ul.scrollTop=bot-ul.clientHeight+4}
+}
+function acPlace(inp){
+  const r=inp.getBoundingClientRect(),box=$('ac');
+  box.style.left=(r.left+scrollX)+'px';
+  const below=innerHeight-r.bottom;
+  box.style.top=(r.bottom+scrollY+4)+'px';
+  if(below<200&&r.top>below){box.style.top='';box.style.top=(r.top+scrollY-4-box.offsetHeight)+'px'}
+}
+function acUpdate(inp,all){
+  const items=acFilter(inp.value.slice(0,inp.selectionStart??inp.value.length),all);
+  if(!items.length){acClose();return}
+  ac.items=items;ac.sel=0;ac.moved=false;ac.open=true;ac.input=inp;
+  $('ac').hidden=false;acRender();acPlace(inp);
+}
+function acClose(){if(!ac.open)return;ac.open=false;ac.items=[];$('ac').hidden=true}
+const SLOT_RE=/(?<![A-Za-z0-9$])(nn|n|d|addr)(?![A-Za-z0-9])/g;
+function selectSlot(inp,from){
+  SLOT_RE.lastIndex=0;let m;
+  while((m=SLOT_RE.exec(inp.value)))if(m.index>=from){inp.setSelectionRange(m.index,m.index+m[0].length);return true}
+  return false;
+}
+function acAccept(inp){
+  const x=ac.items[ac.sel];if(!x)return;
+  if(x.summary){
+    if(x.only&&!x.only.parts.some(p=>p.t==='slot')&&x.only.text===x.mn){inp.value=x.mn;acClose();inp.setSelectionRange(x.mn.length,x.mn.length);asmPreview(inp);return}
+    inp.value=x.mn+' ';inp.setSelectionRange(inp.value.length,inp.value.length);acUpdate(inp,false);asmPreview(inp);return;
+  }
+  const typed=acNorm(inp.value.slice(0,inp.selectionStart??inp.value.length));
+  inp.value=(typed&&acPrefix(x.parts,typed,true))||x.text;acClose();
+  if(!selectSlot(inp,0))inp.setSelectionRange(x.text.length,x.text.length);
+  asmPreview(inp);
+}
+// Show what the current text assembles to, while typing.
+function asmPreview(inp){
+  const v=inp.value.trim();
+  if(!v){asmMsg(`Editing ${h4(asmAddr)}. Tab completes, Enter writes, Esc closes.`);return}
+  try{const r=assemble(v,asmAddr);if(r.bytes.length){asmMsg(`${h4(asmAddr)}: ${r.bytes.map(hx2).join(' ')}   Enter writes ${r.bytes.length} byte${r.bytes.length>1?'s':''}.`);$('asmmsg').classList.add('ok');return}}catch(_){}
+  asmMsg(`Editing ${h4(asmAddr)}. Tab completes, Enter writes, Esc closes.`);
+}
+// Returns true when the key was used by the completion list.
+function acKey(e,inp){
+  if(e.key===' '&&e.ctrlKey){e.preventDefault();acUpdate(inp,true);return true}
+  if(e.key==='F1'||e.key==='?'){
+    e.preventDefault();
+    const x=ac.open?ac.items[ac.sel]:acFilter(inp.value,false)[0];
+    if(x){if(ac.open)$('ac').hidden=true;openHelp(x)}
+    return true;
+  }
+  if(!ac.open){
+    if(e.key==='Tab'&&!e.shiftKey){e.preventDefault();selectSlot(inp,inp.selectionEnd)||selectSlot(inp,0);return true}
+    return false;
+  }
+  if(e.key==='ArrowDown'||e.key==='ArrowUp'){
+    e.preventDefault();ac.moved=true;
+    ac.sel=(ac.sel+(e.key==='ArrowDown'?1:-1)+ac.items.length)%ac.items.length;acRender();return true;
+  }
+  if(e.key==='PageDown'||e.key==='PageUp'){e.preventDefault();ac.moved=true;ac.sel=Math.max(0,Math.min(ac.items.length-1,ac.sel+(e.key==='PageDown'?8:-8)));acRender();return true}
+  if(e.key==='Tab'){e.preventDefault();acAccept(inp);return true}
+  if(e.key==='Enter'&&ac.moved){e.preventDefault();acAccept(inp);return true}
+  if(e.key==='Escape'){e.preventDefault();acClose();return true}
+  if(e.key==='Enter')acClose();
+  return false;
+}
+$('listing').addEventListener('input',e=>{
+  if(!e.target.classList||!e.target.classList.contains('ined'))return;
+  acUpdate(e.target,false);asmPreview(e.target);
+});
+$('listing').addEventListener('focusout',e=>{if(e.target.classList&&e.target.classList.contains('ined'))setTimeout(()=>{if(document.activeElement!==ac.input&&!$('help').open)acClose()},0)});
+$('ac').addEventListener('mousedown',e=>{
+  e.preventDefault();                         // keep focus in the editor
+  const li=e.target.closest('li');if(!li||!ac.input)return;
+  if(e.target.closest('.hq')){ac.sel=+li.dataset.i;acRender();openHelp(ac.items[ac.sel]);return}
+  ac.sel=+li.dataset.i;acAccept(ac.input);ac.input.focus();
+});
+// Wheel over the list scrolls only the list: never the page, the listing or memory, even at either end.
+$('ac').addEventListener('wheel',e=>{
+  e.preventDefault();e.stopPropagation();
+  const ul=$('ac-list'),px=e.deltaMode===1?e.deltaY*30:e.deltaMode===2?e.deltaY*ul.clientHeight:e.deltaY;
+  ul.scrollTop+=px;
+},{passive:false});
+addEventListener('resize',()=>{if(ac.open&&ac.input)acPlace(ac.input)});
+addEventListener('scroll',()=>{if(ac.open&&ac.input)acPlace(ac.input)},{passive:true});
+
+// ---- instruction help ----
+// What an instruction reads and writes is found by running it in a scratch CPU from random states:
+// a register is "written" if it ever changes, and "read" if changing it beforehand changes the outcome.
+// Memory and port accesses are traced directly. The explanations are written by hand per instruction.
+const H_KEYS=['a','f','b','c','d','e','h','l','a_','f_','b_','c_','d_','e_','h_','l_','ixh','ixl','iyh','iyl','sp','i','iff1','iff2','im'];
+const H_CODE=0x4000,H_N=0x5A,H_NN=0x9234,H_D=5,H_ADDR=0x4010;
+const hGet=(c,k)=>k==='ixh'?c.ix>>8:k==='ixl'?c.ix&255:k==='iyh'?c.iy>>8:k==='iyl'?c.iy&255:c[k];
+function hSet(c,k,v){
+  if(k==='ixh')c.ix=(c.ix&255)|(v<<8);else if(k==='ixl')c.ix=(c.ix&0xFF00)|v;
+  else if(k==='iyh')c.iy=(c.iy&255)|(v<<8);else if(k==='iyl')c.iy=(c.iy&0xFF00)|v;
+  else c[k]=v;
+}
+function hRand(seed){let s=(seed*2654435761)>>>0||1;return()=>{s^=s<<13;s>>>=0;s^=s>>>17;s^=s<<5;s>>>=0;return s}}
+let H_MEM=null,H_CPU=null;
+// Pointers must not land on the instruction itself (or it would modify itself).
+const hSafe=v=>(v>=H_CODE-0x100&&v<H_CODE+0x200)?v^0x8000:v;
+function hState(seed){
+  const R=hRand(seed),st={};
+  for(const k of H_KEYS)st[k]=R()&255;
+  st.sp=hSafe(R()&0xFFFF);st.iff1=R()&1;st.iff2=R()&1;st.im=R()%3;st.port=R()&255;
+  for(const [hi,lo] of [['b','c'],['d','e'],['h','l'],['ixh','ixl'],['iyh','iyl']]){const v=hSafe((st[hi]<<8)|st[lo]);st[hi]=v>>8;st[lo]=v&255}
+  return st;
+}
+// Edge cases: every register, memory, the port and the immediate value set to the same byte,
+// so results like zero, overflow and BC = 1 actually occur.
+function hEdges(){
+  const out=[];
+  for(const v of [0x00,0x01,0x0F,0x10,0x7F,0x80,0xFF,0x40]){
+    const st={};for(const k of H_KEYS)st[k]=v;st.iff1=st.iff2=v&1;st.im=v%3;st.sp=hSafe(v*257);st.port=v;st.memv=v;st.n=v;out.push(st);
+  }
+  const one={};for(const k of H_KEYS)one[k]=['c','e','l','ixl','iyl','c_','e_','l_','a'].includes(k)?1:0;
+  one.f=0;one.iff1=one.iff2=0;one.im=0;one.sp=0x8001;one.port=1;one.memv=1;one.n=1;out.push(one);
+  for(const st of out)for(const [hi,lo] of [['b','c'],['d','e'],['h','l'],['ixh','ixl'],['iyh','iyl']]){const w=hSafe((st[hi]<<8)|st[lo]);st[hi]=w>>8;st[lo]=w&255}
+  return out;
+}
+function hRun(bytes,st){
+  if(!H_MEM){H_MEM=new Uint8Array(65536);const R=hRand(77);for(let i=0;i<65536;i++)H_MEM[i]=R()&255;H_CPU=new Z80()}
+  const c=H_CPU;if(st.memv===undefined)c.mem.set(H_MEM);else c.mem.fill(st.memv);bytes.forEach((b,i)=>c.mem[H_CODE+i]=b);
+  for(const k of H_KEYS)if(k!=='sp')hSet(c,k,st[k]);
+  c.sp=st.sp;c.pc=H_CODE;c.r=0x11;c.halted=false;c.cycles=0;
+  const w=[],r=[],io=[];
+  c.wb=(a,v)=>{a&=0xFFFF;c.mem[a]=v&255;w.push(a)};
+  c.rb=a=>{a&=0xFFFF;r.push(a);return c.mem[a]};
+  c.onIn=p=>{io.push('in '+(p&0xFFFF));return st.port};
+  c.onOut=(p,v)=>{io.push('out '+(p&0xFFFF)+'='+(v&255))};
+  c.step();
+  const out={};for(const k of H_KEYS)out[k]=hGet(c,k);out.sp=c.sp;
+  return{out,pc:c.pc,cyc:c.cycles,halted:c.halted,w:[...new Set(w)].map(a=>a+'='+c.mem[a]),wa:[...new Set(w)],ra:[...new Set(r)],io};
+}
+function hAnalyse(x){
+  const e=x.e,len=e.len;
+  // the instruction with values in its slots; the byte value n differs from run to run
+  const cache={};
+  const bytesFor=n=>{
+    if(cache[n])return cache[n];
+    const src=x.text.replace(/(?<![A-Za-z0-9$])(nn|n|d|addr)(?![A-Za-z0-9])/g,m=>({n:'$'+hx2(n),nn:'$'+hx4(H_NN),d:String(H_D),addr:'$'+hx4(H_ADDR)})[m]);
+    try{return cache[n]=assemble(src,H_CODE).bytes}catch(_){return null}
+  };
+  if(!bytesFor(H_N))return null;
+  const base=[],runs=[],code=[];
+  const add=st=>{const b=bytesFor(st.n);base.push(st);code.push(b);runs.push(hRun(b,st))};
+  for(let t=0;t<16;t++){const st=hState(t+1);st.n=t?st.port^0xA5:H_N;add(st)}
+  for(const st of hEdges())add(st);
+  const bytes=code[0];
+  const W=new Set(),flag={};
+  for(const k of H_KEYS){if(k==='f')continue;if(runs.some((o,t)=>o.out[k]!==base[t][k]))W.add(k)}
+  if(runs.some((o,t)=>o.out.sp!==base[t].sp))W.add('sp');
+  let fmask=0;
+  for(const [n,bit] of FLAGS){
+    const after=runs.map(o=>o.out.f&bit?1:0),same=runs.every((o,t)=>(o.out.f&bit)===(base[t].f&bit));
+    flag[n]=same?'-':after.every(v=>v===0)?'0':after.every(v=>v===1)?'1':'*';
+    if(!same)fmask|=bit;
+  }
+  if(fmask)W.add('f');
+  const next=H_CODE+len,jumps=runs.some(o=>o.pc!==next&&!o.halted);
+  const dmask=fmask&~(FY|FX);   // undocumented Y/X copies don't count as reading something
+  const sig=(o,skip)=>{
+    const parts=[];
+    for(const k of W){if(k==='f')parts.push('f'+(o.out.f&dmask));else if(k!==skip)parts.push(k+o.out[k])}
+    parts.push('pc'+o.pc,'w'+o.w.join(','),'ra'+o.ra.join(','),'io'+o.io.join(','));
+    return parts.join('|');
+  };
+  const R=new Set(),fread=new Set();
+  const PT=[0,1,2,3,4,5,16,17,22,24];   // random and edge runs used for probing
+  const probe=(mut,skip)=>{for(const t of PT){const st={...base[t]};mut(st,t);if(sig(hRun(code[t],st),skip)!==sig(runs[t],skip))return true}return false};
+  for(const k of H_KEYS){
+    if(k==='f'){for(const [n,bit] of FLAGS)if(bit!==FY&&bit!==FX&&probe(st=>{st.f^=bit},null))fread.add(n);continue}
+    const bump=k==='iff1'||k==='iff2'?1:k==='im'?1:0x5B;
+    if(probe((st,t)=>{st[k]=k==='im'?(st.im+1)%3:(st[k]^bump)&255},W.has(k)?null:k))R.add(k);
+  }
+  if(probe(st=>{st.sp=hSafe(st.sp^0x0404)},W.has('sp')?null:'sp'))R.add('sp');
+  if(fread.size)R.add('f');
+  if(probe(st=>{st.port^=0x5B},null))R.add('port');
+  // memory: name each touched address after the register that points at it (random runs only)
+  const memR=new Set(),memW=new Set();
+  for(let t=0;t<16;t++){
+    const st0=base[t],o0=runs[t];
+    const ptr={'(HL)':(st0.h<<8)|st0.l,'(DE)':(st0.d<<8)|st0.e,'(BC)':(st0.b<<8)|st0.c,'(IX+d)':(((st0.ixh<<8)|st0.ixl)+H_D)&0xFFFF,'(IY+d)':(((st0.iyh<<8)|st0.iyl)+H_D)&0xFFFF,'(nn)':H_NN};
+    const name=a=>{
+      for(const [k,v] of Object.entries(ptr)){if(a===v)return k;if(a===((v+1)&0xFFFF)&&/nn/.test(k))return k}
+      const s=st0.sp;if([s,(s+1)&0xFFFF,(s-1)&0xFFFF,(s-2)&0xFFFF].includes(a))return 'stack';
+      return 'memory';
+    };
+    o0.ra.forEach(a=>memR.add(name(a)));o0.wa.forEach(a=>memW.add(name(a)));
+  }
+  const stackR=memR.delete('stack'),stackW=memW.delete('stack');
+  const cyc={taken:new Set(),not:new Set()};
+  runs.forEach(o=>(o.pc!==next&&!o.halted?cyc.taken:cyc.not).add(o.cyc));
+  return{bytes,W,R,flag,fread,jumps,memR,memW,stackR,stackW,io:{in:runs.some(o=>o.io.some(s=>s.startsWith('in'))),out:runs.some(o=>o.io.some(s=>s.startsWith('out')))},cyc};
+}
+
+// ---- hand-written explanations ----
+const COND={NZ:'Z = 0 (not zero)',Z:'Z = 1 (zero)',NC:'C = 0 (no carry)',C:'C = 1 (carry)',PO:'P/V = 0 (parity odd)',PE:'P/V = 1 (parity even)',P:'S = 0 (plus)',M:'S = 1 (minus)'};
+const R16={BC:['B','C'],DE:['D','E'],HL:['H','L'],IX:['IXH','IXL'],IY:['IYH','IYL'],SP:['SP high','SP low'],AF:['A','F']};
+const hOps=x=>{const t=x.text,i=t.indexOf(' ');if(i<0)return[];const out=[];let depth=0,cur='';for(const ch of t.slice(i+1)){if(ch==='('){depth++}else if(ch===')'){depth--}if(ch===','&&!depth){out.push(cur);cur=''}else cur+=ch}out.push(cur);return out};
+const hasCond=(mn,o)=>['JP','JR','CALL','RET'].includes(mn)&&o.length&&COND[o[0]]&&!(mn!=='RET'&&o.length===1);
+function hOperation(x){
+  const mn=x.mn,o=hOps(x),m=o[0],cc=hasCond(mn,o)?`if ${COND[o[0]]}: `:'',t=cc?o.slice(1):o;
+  const copy=(r)=>o.length===2&&['RLC','RRC','RL','RR','SLA','SRA','SLL','SRL'].includes(mn)?`, ${o[1]} ← result`:'';
+  switch(mn){
+    case 'LD':{
+      const [d,s]=o;
+      if(/\(nn\)/.test(d)&&R16[s])return`(nn) ← ${R16[s][1]}, (nn+1) ← ${R16[s][0]}`;
+      if(/\(nn\)/.test(s)&&R16[d])return`${R16[d][1]} ← (nn), ${R16[d][0]} ← (nn+1)`;
+      return`${d} ← ${s}`;}
+    case 'PUSH':return`SP ← SP − 2, (SP) ← ${R16[m][1]}, (SP+1) ← ${R16[m][0]}`;
+    case 'POP':return`${R16[m][1]} ← (SP), ${R16[m][0]} ← (SP+1), SP ← SP + 2`;
+    case 'EX':return m==='(SP)'?`${R16[o[1]][1]} ↔ (SP), ${R16[o[1]][0]} ↔ (SP+1)`:`${o[0]} ↔ ${o[1]}`;
+    case 'EXX':return"BC ↔ BC', DE ↔ DE', HL ↔ HL'";
+    case 'ADD':return`${o[0]} ← ${o[0]} + ${o[1]}`;
+    case 'ADC':return`${o[0]} ← ${o[0]} + ${o[1]} + carry`;
+    case 'SUB':return`A ← A − ${m}`;
+    case 'SBC':return`${o[0]} ← ${o[0]} − ${o[1]} − carry`;
+    case 'AND':return`A ← A AND ${m}`;
+    case 'OR':return`A ← A OR ${m}`;
+    case 'XOR':return`A ← A XOR ${m}`;
+    case 'CP':return`A − ${m}   (result thrown away, flags kept)`;
+    case 'INC':return`${m} ← ${m} + 1`;
+    case 'DEC':return`${m} ← ${m} − 1`;
+    case 'DAA':return'A ← A corrected to two BCD digits';
+    case 'CPL':return'A ← NOT A';
+    case 'NEG':return'A ← 0 − A';
+    case 'CCF':return'carry ← NOT carry';
+    case 'SCF':return'carry ← 1';
+    case 'NOP':return'nothing';
+    case 'HALT':return'stop until an interrupt (PC stays on the HALT)';
+    case 'DI':return'IFF1 ← 0, IFF2 ← 0';
+    case 'EI':return'IFF1 ← 1, IFF2 ← 1 (after the next instruction)';
+    case 'IM':return`interrupt mode ← ${m}`;
+    case 'RLCA':return'carry ← A bit 7, A ← A rotated left (bit 7 → bit 0)';
+    case 'RRCA':return'carry ← A bit 0, A ← A rotated right (bit 0 → bit 7)';
+    case 'RLA':return'A ← A shifted left, bit 0 ← old carry, carry ← old bit 7';
+    case 'RRA':return'A ← A shifted right, bit 7 ← old carry, carry ← old bit 0';
+    case 'RLC':return`carry ← ${m} bit 7, ${m} ← ${m} rotated left (bit 7 → bit 0)${copy()}`;
+    case 'RRC':return`carry ← ${m} bit 0, ${m} ← ${m} rotated right (bit 0 → bit 7)${copy()}`;
+    case 'RL':return`${m} ← ${m} shifted left, bit 0 ← old carry, carry ← old bit 7${copy()}`;
+    case 'RR':return`${m} ← ${m} shifted right, bit 7 ← old carry, carry ← old bit 0${copy()}`;
+    case 'SLA':return`carry ← ${m} bit 7, ${m} ← ${m} shifted left, bit 0 ← 0${copy()}`;
+    case 'SLL':return`carry ← ${m} bit 7, ${m} ← ${m} shifted left, bit 0 ← 1${copy()}`;
+    case 'SRA':return`carry ← ${m} bit 0, ${m} ← ${m} shifted right, bit 7 kept${copy()}`;
+    case 'SRL':return`carry ← ${m} bit 0, ${m} ← ${m} shifted right, bit 7 ← 0${copy()}`;
+    case 'RLD':return'A bits 3–0 ← (HL) bits 7–4, (HL) bits 7–4 ← (HL) bits 3–0, (HL) bits 3–0 ← old A bits 3–0';
+    case 'RRD':return'A bits 3–0 ← (HL) bits 3–0, (HL) bits 3–0 ← (HL) bits 7–4, (HL) bits 7–4 ← old A bits 3–0';
+    case 'BIT':return`Z ← NOT ${o[1]} bit ${o[0]}`;
+    case 'SET':return`${o[1]} bit ${o[0]} ← 1${o[2]?`, ${o[2]} ← result`:''}`;
+    case 'RES':return`${o[1]} bit ${o[0]} ← 0${o[2]?`, ${o[2]} ← result`:''}`;
+    case 'JP':return cc+`PC ← ${t[0].replace(/^\((HL|IX|IY)\)$/,'$1')}`;
+    case 'JR':return cc+`PC ← addr   (stored as an offset −128…+127 from the next instruction)`;
+    case 'DJNZ':return'B ← B − 1; if B ≠ 0: PC ← addr';
+    case 'CALL':return cc+`SP ← SP − 2, (SP) ← PC of the next instruction, PC ← ${t[0]}`;
+    case 'RET':return cc+'PC ← (SP), SP ← SP + 2';
+    case 'RETI':return'PC ← (SP), SP ← SP + 2, and tell the interrupting device it is done';
+    case 'RETN':return'PC ← (SP), SP ← SP + 2, IFF1 ← IFF2';
+    case 'RST':return`SP ← SP − 2, (SP) ← PC of the next instruction, PC ← ${m}`;
+    case 'IN':return o[1]==='(n)'?'A ← port n (A is put on the high half of the address bus)':o[0]==='F'||o.length===1?'read port BC, set the flags, keep nothing':`${o[0]} ← port BC`;
+    case 'OUT':return o[0]==='(n)'?'port n ← A (A is put on the high half of the address bus)':`port BC ← ${o[1]}`;
+    case 'LDI':return'(DE) ← (HL), HL ← HL + 1, DE ← DE + 1, BC ← BC − 1';
+    case 'LDD':return'(DE) ← (HL), HL ← HL − 1, DE ← DE − 1, BC ← BC − 1';
+    case 'LDIR':return'repeat LDI until BC = 0';
+    case 'LDDR':return'repeat LDD until BC = 0';
+    case 'CPI':return'A − (HL), HL ← HL + 1, BC ← BC − 1';
+    case 'CPD':return'A − (HL), HL ← HL − 1, BC ← BC − 1';
+    case 'CPIR':return'repeat CPI until A = (HL) or BC = 0';
+    case 'CPDR':return'repeat CPD until A = (HL) or BC = 0';
+    case 'INI':return'(HL) ← port BC, HL ← HL + 1, B ← B − 1';
+    case 'IND':return'(HL) ← port BC, HL ← HL − 1, B ← B − 1';
+    case 'INIR':return'repeat INI until B = 0';
+    case 'INDR':return'repeat IND until B = 0';
+    case 'OUTI':return'B ← B − 1, port BC ← (HL), HL ← HL + 1';
+    case 'OUTD':return'B ← B − 1, port BC ← (HL), HL ← HL − 1';
+    case 'OTIR':return'repeat OUTI until B = 0';
+    case 'OTDR':return'repeat OUTD until B = 0';
+  }
+  return '';
+}
+const DETAIL={
+  LD:'Copies a value. The source is unchanged. Only LD A,I and LD A,R change any flags; every other LD leaves them alone. 16-bit values are stored low byte first (little-endian).',
+  PUSH:'Saves a register pair on the stack. The stack grows downwards: SP is decreased by 2 and the pair is written there, high byte at the higher address. POP undoes it.',
+  POP:'Takes the two bytes at the top of the stack into a register pair and moves SP up by 2. POP AF restores the flags too.',
+  EX:'Swaps two registers, or a register pair with the two bytes at the top of the stack. EX AF,AF\' switches to the alternate A and flags, a quick way to save them in an interrupt routine.',
+  EXX:'Swaps BC, DE and HL with their alternates BC\', DE\' and HL\' in one go. A and F are not swapped (use EX AF,AF\' for that). Often used to get three spare register pairs without touching the stack.',
+  ADD:'Adds a value to A (8-bit) or to HL, IX or IY (16-bit). 8-bit ADD sets all the main flags; 16-bit ADD changes only carry and half carry (from bit 11), and N is reset.',
+  ADC:'Adds a value plus the carry flag. Chained after an ADD it adds numbers longer than 8 or 16 bits, one part at a time. Unlike ADD HL, ADC HL sets S, Z and P/V too.',
+  SUB:'Subtracts a value from A. Carry is set when a borrow was needed (the value was larger than A). P/V shows signed overflow.',
+  SBC:'Subtracts a value and the carry flag. Used after SUB for numbers longer than 8 bits, and as SBC HL,rr for 16-bit subtraction (clear carry first with OR A).',
+  AND:'Keeps only the bits that are 1 in both A and the value. Used to mask bits out. Carry is always cleared, H always set, and P/V shows parity.',
+  OR:'Sets the bits that are 1 in either A or the value. OR A is a quick way to clear carry and test whether A is zero.',
+  XOR:'Flips the bits of A where the value has a 1. XOR A sets A to 0 in one byte and clears carry.',
+  CP:'Compares A with a value by subtracting it, but keeps only the flags. Z = 1 if they are equal, carry = 1 if the value is larger than A (unsigned).',
+  INC:'Adds 1. The 8-bit form sets S, Z, H and P/V but leaves carry alone. The 16-bit form (INC BC/DE/HL/SP/IX/IY) changes no flags at all.',
+  DEC:'Subtracts 1. The 8-bit form sets S, Z, H and P/V but leaves carry alone, and N is set. The 16-bit form changes no flags, so test BC = 0 with LD A,B / OR C.',
+  DAA:'Corrects A after adding or subtracting two BCD numbers (two decimal digits per byte), using the H, N and carry flags left by that instruction.',
+  CPL:'Inverts every bit of A (one\'s complement). H and N are set.',
+  NEG:'Makes A negative (two\'s complement): A ← 0 − A. Carry is set unless A was 0; P/V is set if A was $80.',
+  CCF:'Flips the carry flag. H gets the old carry.',
+  SCF:'Sets the carry flag to 1.',
+  NOP:'Does nothing for 4 T-states. Useful as a placeholder or for short delays.',
+  HALT:'Stops the CPU until an interrupt (or reset) arrives. The CPU keeps doing NOPs internally so memory refresh continues. The workbench has no interrupts, so a HALT ends a run.',
+  DI:'Disables maskable interrupts by clearing both interrupt flip-flops.',
+  EI:'Enables maskable interrupts. They are accepted only after the next instruction, so EI followed by RET returns safely.',
+  IM:'Selects how a maskable interrupt is handled: mode 0 runs an instruction put on the bus, mode 1 always calls $0038, mode 2 jumps through a table at I × 256 + the byte from the device.',
+  RLCA:'Rotates A left; bit 7 goes to both bit 0 and carry. Faster than RLC A but only changes carry, H and N.',
+  RRCA:'Rotates A right; bit 0 goes to both bit 7 and carry.',
+  RLA:'Rotates A left through carry: a 9-bit rotation using carry as the extra bit.',
+  RRA:'Rotates A right through carry: a 9-bit rotation using carry as the extra bit.',
+  RLC:'Rotates left; bit 7 goes to both bit 0 and carry. Sets S, Z and parity too, unlike RLCA. The undocumented forms with a second register also copy the result there.',
+  RRC:'Rotates right; bit 0 goes to both bit 7 and carry.',
+  RL:'Rotates left through carry (9 bits). RL after SLA shifts a 16-bit or longer number left.',
+  RR:'Rotates right through carry (9 bits). RR after SRL shifts a longer number right.',
+  SLA:'Shifts left: multiplies by 2. Bit 7 goes to carry, bit 0 becomes 0.',
+  SLL:'Undocumented: shifts left like SLA but bit 0 becomes 1.',
+  SRA:'Shifts right keeping the sign bit: divides a signed number by 2 (rounding down). Bit 0 goes to carry.',
+  SRL:'Shifts right: divides an unsigned number by 2. Bit 7 becomes 0, bit 0 goes to carry.',
+  RLD:'Rotates a 12-bit value made of the low half of A and the byte at (HL) left by one BCD digit (4 bits). Used for BCD arithmetic and for shifting hex digits.',
+  RRD:'Rotates a 12-bit value made of the low half of A and the byte at (HL) right by one BCD digit (4 bits).',
+  BIT:'Tests one bit: Z is set if the bit is 0. Nothing else is changed except flags.',
+  SET:'Sets one bit to 1. No flags are changed.',
+  RES:'Resets (clears) one bit to 0. No flags are changed.',
+  JP:'Jumps to an absolute address, optionally only if a condition holds. JP (HL) jumps to the address in HL (the parentheses are traditional; nothing is read from memory).',
+  JR:'Jumps relative to the next instruction, −128 to +127 bytes, optionally if Z or carry is set or reset. One byte shorter than JP, and the code can run at any address.',
+  DJNZ:'Decrements B and jumps if it is not zero. The standard counted loop: LD B,count … DJNZ loop runs the loop count times. No flags are changed.',
+  CALL:'Calls a subroutine: pushes the address of the next instruction and jumps. The subroutine returns with RET. The conditional forms call only if the condition holds.',
+  RET:'Returns from a subroutine by popping the return address into PC. The conditional forms return only if the condition holds.',
+  RETI:'Returns from a maskable interrupt routine. Daisy-chained Z80 devices watch for this instruction to know the interrupt has been handled.',
+  RETN:'Returns from a non-maskable interrupt routine and restores the interrupt enable state saved when the NMI happened.',
+  RST:'A one-byte CALL to a fixed address ($00, $08 … $38). Used for frequently called routines and for interrupt mode 0.',
+  IN:'Reads a byte from an I/O port. IN A,(n) does not change flags; IN r,(C) sets S, Z and parity. In the workbench, port $00 is the terminal status and port $01 the keyboard.',
+  OUT:'Writes a byte to an I/O port. In the workbench, writing to port $01 prints a character in the terminal.',
+  LDI:'Copies one byte from (HL) to (DE) and steps both pointers up, counting BC down. P/V is set while BC is not 0.',
+  LDD:'Copies one byte from (HL) to (DE) and steps both pointers down, counting BC down.',
+  LDIR:'Copies BC bytes from (HL) to (DE), upwards. It repeats itself (PC goes back 2) until BC is 0, so it can be interrupted. To fill memory, store the first byte and copy from it to the next address.',
+  LDDR:'Copies BC bytes from (HL) to (DE), downwards. Use it instead of LDIR when the areas overlap and the destination is higher.',
+  CPI:'Compares A with (HL), steps HL up and counts BC down. Z is set on a match, P/V while BC is not 0.',
+  CPD:'Compares A with (HL), steps HL down and counts BC down.',
+  CPIR:'Searches upwards for the byte in A: repeats CPI until it finds it (Z = 1) or BC reaches 0.',
+  CPDR:'Searches downwards for the byte in A: repeats CPD until it finds it or BC reaches 0.',
+  INI:'Reads a port into (HL), steps HL up and counts B down.',
+  IND:'Reads a port into (HL), steps HL down and counts B down.',
+  INIR:'Reads B bytes from port C into memory at (HL) upwards.',
+  INDR:'Reads B bytes from port C into memory at (HL) downwards.',
+  OUTI:'Counts B down, then writes (HL) to port BC and steps HL up.',
+  OUTD:'Counts B down, then writes (HL) to port BC and steps HL down.',
+  OTIR:'Writes B bytes from memory at (HL) upwards to port C.',
+  OTDR:'Writes B bytes from memory at (HL) downwards to port C.',
+  DB:'Not an instruction: puts the given bytes into memory. Several values and "text" can be separated by commas.',
+  DW:'Not an instruction: puts 16-bit words into memory, low byte first.',
+};
+function hFlagMeaning(n,x,state){
+  const mn=x.mn,o=hOps(x);
+  if(state==='0')return'always reset to 0';
+  if(state==='1')return'always set to 1';
+  if(n==='Y'||n==='X')return`undocumented: copy of bit ${n==='Y'?5:3} of a result`;
+  if(n==='S')return'set if the result is negative (bit 7 is 1)';
+  if(n==='Z')return mn==='BIT'?'set if the tested bit is 0':['CPI','CPD','CPIR','CPDR'].includes(mn)?'set if A matched (HL)':['INI','IND','INIR','INDR','OUTI','OUTD','OTIR','OTDR'].includes(mn)?'set if B reached 0':'set if the result is zero';
+  if(n==='H')return/^(ADD|ADC|SBC)$/.test(mn)&&R16[o[0]]&&o[0]!=='AF'?'carry from bit 11 to bit 12':'carry (or borrow) from bit 3 to bit 4';
+  if(n==='N')return'set after a subtraction, reset after an addition (DAA uses it)';
+  if(n==='C'){
+    if(/^(RLC|RRC|RL|RR|SLA|SLL|SRA|SRL|RLCA|RRCA|RLA|RRA)$/.test(mn))return'the bit shifted out';
+    if(/^(SUB|SBC|CP|NEG)$/.test(mn))return'set if a borrow was needed';
+    if(mn==='CCF')return'flipped';if(mn==='DAA')return'set if the decimal result is over 99';
+    return R16[o[0]]&&o[0]!=='AF'?'carry out of bit 15':'carry out of bit 7';
+  }
+  if(n==='P/V'){
+    if(/^(ADD|ADC|SUB|SBC|CP|INC|DEC|NEG)$/.test(mn))return'overflow: set if a signed result does not fit';
+    if(/^(LDI|LDD|LDIR|LDDR|CPI|CPD|CPIR|CPDR)$/.test(mn))return'set if BC is not 0 afterwards';
+    if(mn==='LD')return'copy of IFF2 (whether interrupts were enabled)';
+    if(/^(INI|IND|INIR|INDR|OUTI|OUTD|OTIR|OTDR)$/.test(mn))return'undocumented: depends on the data';
+    return'parity: set if the result has an even number of 1 bits';
+  }
+  return'';
+}
+
+// ---- the modal ----
+const H_LAYOUT=[ // label, key(s), grid column, row
+  ['A','a',1,1],['PSW','f',2,1],['B','b',1,2],['C','c',2,2],['D','d',1,3],['E','e',2,3],['H','h',1,4],['L','l',2,4],
+  ["A'",'a_',4,1],["PSW'",'f_',5,1],["B'",'b_',4,2],["C'",'c_',5,2],["D'",'d_',4,3],["E'",'e_',5,3],["H'",'h_',4,4],["L'",'l_',5,4],
+  ['IX','ixh,ixl',1,5,2],['IY','iyh,iyl',4,5,2],['SP','sp',1,6,2],['PC','pc',4,6,2],['IV','i',1,7],['R','r',2,7],['IFF','iff1,iff2',4,7],['IM','im',5,7],
+];
+function hCls(keys,a){
+  const ks=keys.split(','),r=ks.some(k=>a.R.has(k)),w=ks.some(k=>a.W.has(k));
+  return r&&w?' rw':r?' rd':w?' wr':'';
+}
+function hDiagram(a,x){
+  // PC: written by jumps; read by relative jumps and by anything that pushes it
+  const pcR=/^(JR|DJNZ|CALL|RST)$/.test(x.mn),pcW=a.jumps;
+  const cells=H_LAYOUT.map(([lab,keys,col,row,span])=>{
+    let cls=keys==='pc'?(pcR&&pcW?' rw':pcR?' rd':pcW?' wr':''):keys==='r'?(x.text==='LD R,A'?' wr':x.text==='LD A,R'?' rd':''):hCls(keys,a);
+    if(keys==='a'&&x.text==='LD A,R')cls=' wr';
+    return`<div class="hc${cls}" style="grid-column:${col} / span ${span||1};grid-row:${row+1}">${lab}</div>`;
+  }).join('');
+  const flags=FLAGS.map(([n,bit,u])=>{
+    const s=a.flag[n],r=a.fread.has(n),w=s!=='-';
+    return`<div class="hf${r&&w?' rw':r?' rd':w?' wr':''}${u?' undoc':''}"><span>${n}</span><b>${s==='*'?'•':s==='-'?'–':s}</b></div>`;
+  }).join('');
+  const box=(title,r,w,sub)=>`<div class="hb${r&&w?' rw':r?' rd':w?' wr':''}"><span>${title}</span>${sub?`<small>${sub}</small>`:''}</div>`;
+  const mem=[...new Set([...a.memR,...a.memW])].map(n=>box(n==='memory'?'Memory':'Memory '+n,a.memR.has(n),a.memW.has(n),a.memR.has(n)&&a.memW.has(n)?'read, then written':a.memR.has(n)?'read':'written'));
+  const extra=[...mem];
+  if(a.stackR||a.stackW)extra.push(box('Stack',a.stackR,a.stackW,a.stackW&&a.stackR?'read and written':a.stackW?'pushed onto':'popped from'));
+  if(a.io.in||a.io.out)extra.push(box('I/O port',a.io.in,a.io.out,a.io.in&&a.io.out?'in and out':a.io.in?'read (IN)':'written (OUT)'));
+  return`<div class="hgrid"><div class="hcap" style="grid-column:1 / span 2;grid-row:1">Main</div><div class="hcap" style="grid-column:4 / span 2;grid-row:1">Alternate</div>${cells}</div>
+    <div class="hflags">${flags}</div>
+    ${extra.length?`<div class="hextra">${extra.join('')}</div>`:''}
+    <div class="hlegend"><span><i class="rd"></i>read</span><span><i class="wr"></i>written</span><span><i class="rw"></i>read and written</span><span>Flags: • set by the result, 0/1 always, – unchanged</span></div>`;
+}
+function hEncoding(x){
+  const e=x.e;if(!e)return'';
+  const out=e.bytes.map(hx2);
+  for(const t of e.tpl)if(t.k==='s'){
+    if(t.t==='nn'){out[t.pos]='lo';out[t.pos+1]='hi'}else out[t.pos]=t.t==='e'?'e':t.t;
+  }
+  return out.join(' ');
+}
+function hTime(a,x){
+  const f=s=>[...s].sort((p,q)=>q-p).join('/');
+  const t=a.cyc.taken,n=a.cyc.not;
+  if(t.size&&n.size){
+    const rep=/^(LDIR|LDDR|CPIR|CPDR|INIR|INDR|OTIR|OTDR)$/.test(x.mn);
+    return rep?`${f(t)} T-states per repeat, ${f(n)} for the last one`:`${f(t)} T-states if it jumps, ${f(n)} if not`;
+  }
+  return`${f(t.size?t:n)} T-states`;
+}
+function hSlotNote(x){
+  const have=new Set(x.parts.filter(p=>p.t==='slot').map(p=>p.v)),out=[];
+  if(have.has('n'))out.push('<i>n</i> = the byte value');
+  if(have.has('nn'))out.push('<i>lo hi</i> = the 16-bit value, low byte first');
+  if(have.has('d'))out.push('<i>d</i> = signed offset −128…+127');
+  if(have.has('addr'))out.push('<i>e</i> = jump distance from the next instruction, −128…+127 (the assembler works it out from addr)');
+  return out.length?' '+out.join('; ')+'.':'';
+}
+let helpReturn=null;
+function openHelp(x){
+  if(!x)return;
+  if(x.summary)x=acList().find(y=>y.mn===x.mn&&!y.undoc)||acList().find(y=>y.mn===x.mn);
+  const dlg=$('help');if(!dlg)return;
+  helpReturn=document.activeElement;
+  const forms=acList().filter(y=>y.mn===x.mn).length;
+  const isData=x.mn==='DB'||x.mn==='DW';
+  const a=isData?null:hAnalyse(x);
+  const head=x.parts.map((p,k)=>p.t==='slot'?`<i>${esc(p.v)}</i>`:esc(p.v)).join('');
+  const flagRows=a?FLAGS.filter(([n])=>a.flag[n]!=='-').map(([n])=>`<li><b>${n}</b> ${esc(hFlagMeaning(n,x,a.flag[n]))}</li>`).join(''):'';
+  const reads=a&&a.fread.size?`<p class="hnote">Reads the ${[...a.fread].join(', ')} flag${a.fread.size>1?'s':''}.</p>`:'';
+  $('help-body').innerHTML=`
+    <div class="htop"><h3 class="hform">${head}${x.undoc?' <span class="ud">undocumented</span>':''}</h3><p class="hsum">${esc(MN_DESC[x.mn]||'')}</p></div>
+    <div class="hcols">
+      <div class="htext">
+        ${isData?'':`<h4>Operation</h4><p class="hop">${esc(hOperation(x))}</p>`}
+        <h4>Explanation</h4><p>${esc(DETAIL[x.mn]||'')}</p>
+        ${a?`<h4>Flags</h4>${flagRows?`<ul class="hfl">${flagRows}</ul>`:'<p>No flags are changed.</p>'}${flagRows?'<p class="hnote">The other flags are unchanged.</p>':''}${reads}`:''}
+        ${a?`<h4>Encoding</h4><p class="hop">${hEncoding(x)}</p><p class="hnote">${x.len} byte${x.len>1?'s':''}, ${esc(hTime(a,x))}.${hSlotNote(x)}</p>`:''}
+        ${forms>1?`<p class="hnote">${x.mn} has ${forms} forms. Type <b>${x.mn} </b> in the editor to see them all.</p>`:''}
+      </div>
+      ${a?`<div class="hdia" aria-label="What the instruction reads and writes">${hDiagram(a,x)}</div>`:''}
+    </div>`;
+  if(typeof dlg.showModal==='function')dlg.showModal();else dlg.setAttribute('open','');
+  $('help-close').focus();
+}
+function closeHelp(){const d=$('help');if(d.open)d.close()}
+$('help').addEventListener('close',()=>{
+  const r=helpReturn;helpReturn=null;
+  if(r&&r.isConnected){r.focus();if(ac.items.length&&r===ac.input){ac.open=true;$('ac').hidden=false;acPlace(r)}}
+});
+$('help-close').onclick=closeHelp;
+$('help').addEventListener('click',e=>{if(e.target===$('help'))closeHelp()});  // click on the backdrop
+
+function setPC(a){
+  editing=false;acClose();
+  if(running){running=false;clearTimeout(timer);overTarget=-1}
+  prev=snap();cpu.mark++;cpu.pc=a&0xFFFF;cpu.halted=false;follow=true;
+  setState('paused',`PC set to ${h4(cpu.pc)}. Press G to run or S to step from here.`);render();
+}
+function goTo(){
+  const inp=$('i-dis'),v=parseHexAddr(inp.value);
+  if(v===null){inp.classList.add('is-invalid');inp.focus();return}
+  inp.classList.remove('is-invalid');inp.value=hx4(v);disStart=v;follow=false;renderDis();
+}
+$('b-goto').onclick=goTo;
+$('i-dis').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();goTo()}});
+$('i-dis').addEventListener('input',e=>e.target.classList.remove('is-invalid'));
+$('b-follow').onclick=()=>{follow=true;$('i-dis').value='';renderDis()};
+
+// mouse wheel / trackpad scrolling: one row per ~30px of wheel movement
+function prevInstr(a){
+  for(let back=14;back>=1;back--){
+    let s=(a-back)&0xFFFF,last=-1;
+    for(let g=0;g<14;g++){const dist=(a-s)&0xFFFF;if(dist===0||dist>back)break;last=s;s=(s+disasm(cpu.mem,s).len)&0xFFFF}
+    if(s===a&&last>=0)return last;
+  }
+  return(a-1)&0xFFFF;
+}
+function onWheel(el,move){
+  let acc=0;
+  el.addEventListener('wheel',e=>{
+    if(e.ctrlKey)return;
+    e.preventDefault();
+    acc+=e.deltaMode===1?e.deltaY*30:e.deltaMode===2?e.deltaY*300:e.deltaY;
+    const rows=Math.trunc(acc/30);if(!rows)return;acc-=rows*30;move(rows);
+  },{passive:false});
+}
+onWheel($('listing'),rows=>{
+  follow=false;
+  for(let i=0;i<Math.abs(rows);i++)disStart=rows>0?(disStart+disasm(cpu.mem,disStart).len)&0xFFFF:prevInstr(disStart);
+  renderDis();
+});
+// ---- drag the PC arrow to another line ----
+function dragOver(x,y){
+  const el=document.elementFromPoint(x,y),row=el&&el.closest('#listing .lrow');
+  const a=row?+row.dataset.a:null;
+  if(pcDrag.over===a)return;
+  pcDrag.over=a;
+  for(const r of document.querySelectorAll('#listing .lrow.dropto'))r.classList.remove('dropto');
+  if(row&&a!==cpu.pc)row.classList.add('dropto');
+}
+$('listing').addEventListener('pointerdown',e=>{
+  const p=e.target.closest('.lrow.pc .pcg');if(!p||e.button!==0)return;
+  e.preventDefault();pcDrag={over:null,x:e.clientY,moved:false};
+  document.body.classList.add('pcdrag');
+  for(const t of document.querySelectorAll('.tooltip'))t.remove();
+});
+document.addEventListener('pointermove',e=>{
+  if(!pcDrag)return;
+  if(Math.abs(e.clientY-pcDrag.x)>3)pcDrag.moved=true;
+  if(pcDrag.moved)dragOver(e.clientX,e.clientY);
+});
+function endDrag(drop){
+  if(!pcDrag)return;
+  const d=pcDrag;pcDrag=null;document.body.classList.remove('pcdrag');
+  for(const r of document.querySelectorAll('#listing .lrow.dropto'))r.classList.remove('dropto');
+  if(drop&&d.moved&&d.over!==null&&d.over!==cpu.pc)setPC(d.over);
+}
+document.addEventListener('pointerup',()=>endDrag(true));
+document.addEventListener('pointercancel',()=>endDrag(false));
+document.addEventListener('keydown',e=>{if(pcDrag&&e.key==='Escape'){e.stopPropagation();e.preventDefault();endDrag(false)}},true);
+
+onWheel($('dump'),rows=>{memStart=(memStart+rows*16)&0xFFFF;renderMem()});
+
+$('i-mem').addEventListener('keydown',e=>{if(e.key!=='Enter')return;const v=parseHexAddr(e.target.value);if(v!==null){memStart=v&0xFFF0;renderMem()}});
+document.querySelectorAll('[data-go]').forEach(b=>b.onclick=()=>{memStart=cpu[b.dataset.go]&0xFFF0;renderMem()});
+$('c-fw').onchange=e=>{followWrites=e.target.checked;try{localStorage.setItem('z80wb-fw',followWrites?'1':'0')}catch(_){}};
+try{if(localStorage.getItem('z80wb-fw')==='0'){followWrites=false;$('c-fw').checked=false}}catch(_){}
+$('b-mprev').onclick=()=>{memStart=(memStart-256)&0xFFFF;renderMem()};
+$('b-mnext').onclick=()=>{memStart=(memStart+256)&0xFFFF;renderMem()};
+let undoMem=null,undoTimer=0;
+$('b-clear').onclick=()=>{
+  const b=$('b-clear');
+  if(running){running=false;clearTimeout(timer);overTarget=-1}
+  clearTimeout(undoTimer);
+  if(undoMem){
+    cpu.mem.set(undoMem);undoMem=null;b.textContent='Clear RAM';
+    setState('paused','Memory restored.');render();return;
+  }
+  undoMem=cpu.mem.slice();cpu.mem.fill(0);cpu.mark++;prev=null;
+  b.textContent='Undo clear';
+  undoTimer=setTimeout(()=>{undoMem=null;b.textContent='Clear RAM'},6000);
+  setState('paused','All 64 KB set to $00.');render();
+};
+$('dump').addEventListener('click',e=>{
+  const s=e.target.closest('.mb');if(!s||running)return;
+  const a=+s.dataset.a,inp=document.createElement('input');
+  inp.className='mbedit';inp.value=hx2(cpu.mem[a]);inp.maxLength=2;inp.setAttribute('aria-label','Byte at $'+hx4(a));
+  s.replaceWith(inp);inp.focus();inp.select();
+  let done=false;
+  const commit=ok=>{if(done)return;done=true;const v=parseHexAddr(inp.value);if(ok&&v!==null&&v<256)cpu.mem[a]=v;render()};
+  inp.addEventListener('keydown',ev=>{if(ev.key==='Enter')commit(true);if(ev.key==='Escape')commit(false)});
+  inp.addEventListener('blur',()=>commit(true));
+});
+$('i-in').addEventListener('change',e=>{const v=parseHexAddr(e.target.value);if(v!==null&&v<256)inValue=v;e.target.value=hx2(inValue)});
+$('b-ioclr').onclick=()=>{ioLog=[];termText='';keyBuf=[];ioShown=-1;renderIO()};
+// ---- terminal keyboard: keys go into a buffer that port $01 reads ----
+$('term').addEventListener('keydown',e=>{
+  if(e.metaKey||e.ctrlKey||e.altKey)return;
+  let v=null;
+  if(e.key==='Enter')v=13;else if(e.key==='Backspace')v=8;else if(e.key==='Tab')v=9;
+  else if(e.key.length===1){const c=e.key.charCodeAt(0);if(c>=32&&c<127)v=c}
+  if(v===null)return;            // Escape and other keys keep their usual meaning
+  e.preventDefault();e.stopPropagation();
+  if(keyBuf.length<KEYBUF_MAX)keyBuf.push(v);
+  renderIO();
+});
+$('term').addEventListener('paste',e=>{
+  e.preventDefault();
+  for(const ch of (e.clipboardData.getData('text')||'').replace(/\r\n?/g,'\n')){
+    const c=ch==='\n'?13:ch.charCodeAt(0);if(c>=32&&c<127||c===13){if(keyBuf.length<KEYBUF_MAX)keyBuf.push(c)}
+  }
+  renderIO();
+});
+// ---- samples ----
+const SAMPLES={
+  sumsq:{bytes:SAMPLE,msg:'Sample program: HL = 3² + 4², stored at $8000 and sent to port $01. Press S to step.'},
+  wadu:{bytes:[...WADU,...[...WADU_DEMO].map(c=>c.charCodeAt(0))],msg:'WADUZITDO: press G, then type $ in the terminal to run the demo. Typing anything else edits the program (\\ = top, / = show line, _ = backspace).'},
+  echo:{bytes:ECHO,msg:'Echo sample: press G to run, then click the terminal and type. Each key you type is printed back.'},
+};
+function loadSample(name){
+  const smp=SAMPLES[name];if(!smp)return;
+  cpu.mem.fill(0);for(let i=0;i<smp.bytes.length;i++)cpu.mem[i]=smp.bytes[i];
+  bps.clear();keyBuf=[];ioLog=[];termText='';ioShown=-1;
+  $('t-hex').value=smp.bytes.map(hx2).join(' ').replace(/((?:\S+ ){16})/g,'$1\n');
+  $('i-load').value='0000';finishLoad(0,smp.msg);
+}
+$('s-sample').onchange=e=>{loadSample(e.target.value);e.target.value='';e.target.blur()};
+
+document.addEventListener('keydown',e=>{
+  if(e.metaKey||e.ctrlKey||e.altKey)return;
+  if(e.target.closest('input,textarea,select'))return;
+  const k=e.key.toLowerCase();
+  if(k==='s'){e.preventDefault();doStep()}
+  else if(k==='o'){e.preventDefault();doStepOver()}
+  else if(k==='g'){e.preventDefault();running?stopRun('paused',`Stopped at ${h4(cpu.pc)}`):startRun()}
+  else if(e.key==='Escape'&&running)stopRun('paused',`Stopped at ${h4(cpu.pc)}`);
+});
+document.addEventListener('dragover',e=>{e.preventDefault();document.body.classList.add('dragging')});
+document.addEventListener('dragleave',e=>{if(!e.relatedTarget)document.body.classList.remove('dragging')});
+document.addEventListener('drop',e=>{e.preventDefault();document.body.classList.remove('dragging');const f=e.dataTransfer.files[0];if(f)loadFile(f)});
+
+// ---- tooltips (Bootstrap, styled by scandi.css). Any element with data-bs-title gets one. ----
+const TIPS={
+  'b-open':'Load a raw binary (.bin) or an Intel HEX (.hex) file. You can also drop a file anywhere on the page.',
+  'i-load':'Where raw binaries and typed bytes are loaded, and where Reset puts PC. Press Enter to reset to this address.',
+  'b-reset':'Reset all registers and set PC to the start address. Memory is kept.',
+  'b-step':'Execute one instruction. Key: S',
+  'b-over':'Execute one instruction. A CALL, RST, DJNZ or LDIR-type loop runs to completion. Key: O',
+  'b-run':'Run until HALT, a breakpoint, or Stop. Key: G (Esc also stops)',
+  's-speed':'How fast Run goes. Trace shows every step, 3.5 MHz is real time, Full speed is as fast as the browser can.',
+  'b-hex':'Write these bytes at the start address and set PC there.',
+  'i-dis':'Type an address, then press Go to or Enter. PC does not change.',
+  'b-goto':'Show the listing from the address you typed. PC does not change.',
+  'b-follow':'Scroll the listing back to the next instruction (PC).',
+  'i-mem':'Show memory from this address. Press Enter.',
+  'b-mprev':'Show the previous 256 bytes.',
+  'b-mnext':'Show the next 256 bytes.',
+  'b-clear':'Set all 64 KB to $00. You can undo for a few seconds.',
+  'c-fw':'Move the memory view to bytes as the program writes them.',
+  'i-in':'The value IN reads from any port other than $00 and $01.',
+  's-sample':'Load a sample program at $0000. This clears memory.',
+  'b-ioclr':'Clear the terminal, the key buffer and the log.',
+  'term':'Terminal. Click and type: keys go to a buffer that IN A,($01) reads. OUT ($01),A prints here.',
+};
+for(const[id,t]of Object.entries(TIPS)){const el=$(id);if(el){el.setAttribute('data-bs-title',t);el.removeAttribute('title')}}
+document.querySelectorAll('[data-go]').forEach(b=>b.setAttribute('data-bs-title',`Show memory at ${b.dataset.go.toUpperCase()}.`));
+$('c-t').parentElement.setAttribute('data-bs-title','Clock cycles executed since reset.');
+$('c-n').parentElement.setAttribute('data-bs-title','Instructions executed since reset.');
+document.querySelector('#p-stack th:nth-child(3)').setAttribute('data-bs-title','The instruction at the address this word points to. For a return address, that is where RET continues.');
+if(window.bootstrap&&bootstrap.Tooltip){
+  new bootstrap.Tooltip(document.body,{selector:'[data-bs-title]',container:'body',trigger:'hover',placement:'top',delay:{show:450,hide:0}});
+}else{
+  document.addEventListener('mouseover',e=>{const el=e.target.closest&&e.target.closest('[data-bs-title]');if(el)el.title=el.getAttribute('data-bs-title')});
+}
+// Re-rendered listing and memory rows replace their elements; drop any tooltip whose trigger is gone.
+function cleanTips(){
+  for(const t of document.querySelectorAll('.tooltip'))if(!document.querySelector(`[aria-describedby="${t.id}"]`))t.remove();
+}
+
+// ---- start with the sample ----
+loadSample('sumsq');
+</script>
